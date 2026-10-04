@@ -2,9 +2,8 @@
 
 Creating a draft is the safest mutating operation offered by this server: the
 message lands in the user's Drafts mailbox where a human reviews and sends it
-from their own email client. Any automation built on top of this server should
-prefer ``save_draft`` / ``reply_draft`` / ``forward_draft`` over
-``send_email`` wherever possible.
+from their own email client. This fork has no send tool at all, so a draft
+is the only thing this server can ever write towards another person.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from .schemas import (
     ForwardDraftInput,
     ReplyDraftInput,
     SaveDraftInput,
-    SendDraftInput,
     UpdateDraftInput,
 )
 
@@ -50,9 +48,9 @@ def _drafts_mailbox_strict(
 ) -> str:
     """Resolve the drafts mailbox and refuse caller-supplied non-drafts overrides.
 
-    ``update_draft`` and ``send_draft`` both end with a permanent delete
-    of the source UID. Without this check, a caller (or a prompt-injected
-    model on a default-visible draft tool) could pass
+    ``update_draft`` ends with a permanent delete of the source UID.
+    Without this check, a caller (or a prompt-injected model on a
+    default-visible draft tool) could pass
     ``mailbox="INBOX"`` plus an arbitrary UID and the handler would
     happily APPEND a copy to Drafts and then UID-expunge the original
     from INBOX — bypassing ``MAIL_MCP_WRITE_ENABLED``,
@@ -109,7 +107,7 @@ def save_draft(cfg: Config, params: SaveDraftInput) -> dict:
         "uid": int(draft_uid),
         "message_id": msg["Message-ID"],
         # Derived from the resolved attachments actually attached, not the
-        # raw input — mirrors send_email so a caller can verify what shipped.
+        # raw input, so a caller can verify what was actually attached.
         "attachments": [
             {"filename": a.filename, "size": a.size, "content_type": a.content_type}
             for a in attachments
@@ -120,8 +118,8 @@ def save_draft(cfg: Config, params: SaveDraftInput) -> dict:
         # that explicitly so the caller never assumes the BCC was stored.
         response["bcc_dropped"] = list(params.bcc)
         response["note"] = (
-            "BCC was not persisted on the draft (re-enter it at send time). "
-            "Use send_email if you need BCC delivered now."
+            "BCC was not persisted on the draft. Tell the user to re-enter "
+            "it in their mail client when they send."
         )
     if not params.body_html and smtp_client.looks_like_html(params.body):
         response["html_warning"] = _HTML_IN_BODY_WARNING
@@ -309,8 +307,7 @@ def _delete_old_draft_uid_safely(
 ) -> str | None:
     """Delete the previous draft UID, falling back to mark-deleted on no-UIDPLUS.
 
-    ``update_draft`` and ``send_draft`` both APPEND a new copy and then
-    have to remove the old UID. Bare ``EXPUNGE`` would risk wiping
+    ``update_draft`` APPENDs a new copy and then has to remove the old UID. Bare ``EXPUNGE`` would risk wiping
     unrelated ``\\Deleted``-flagged messages in the same folder, and the
     safe ``UID EXPUNGE`` requires RFC 4315 UIDPLUS. When the server does
     not advertise UIDPLUS we fall back to flagging the old UID
@@ -336,78 +333,6 @@ def _delete_old_draft_uid_safely(
             "to avoid removing unrelated messages another client may "
             "have flagged. Your mail client will hide it on next sync."
         )
-
-
-def send_draft(cfg: Config, params: SendDraftInput) -> dict:
-    """Send an existing draft via SMTP, then remove it from Drafts.
-
-    Gated identically to ``send_email`` — requires both env gates plus
-    ``confirm=true`` and counts against the per-account rate limit.
-    """
-    from .send import SendDisabled, _check_rate_limit, is_enabled
-
-    if not is_enabled():
-        raise SendDisabled(
-            "send_draft is registered but disabled by env-var gate.",
-            code=SendDisabled.NOT_ENABLED,
-        )
-    if not params.confirm:
-        raise SendDisabled(
-            "send_draft requires confirm=true on the call (per-tool safety, "
-            "not a configuration issue).",
-            code=SendDisabled.REQUIRES_CONFIRM,
-        )
-
-    import email as _email
-    import email.policy as _policy
-    from email.utils import getaddresses as _getaddresses
-
-    acct = cfg.account(params.account)
-    _check_rate_limit(acct.alias)
-    creds = resolve_auth(acct)
-    with imap_client.connect(acct, creds) as c:
-        mailbox = _drafts_mailbox_strict(c, acct, params.mailbox, tool="send_draft")
-        raw, _headers = imap_client.fetch_raw_message(
-            c, mailbox=mailbox, uid=params.uid,
-        )
-        msg = _email.message_from_bytes(raw, policy=_policy.default)
-        # Strip any X-* or transport headers the IMAP server added
-        for hdr in ("X-Mozilla-Draft-Info", "X-Mozilla-Keys"):
-            if hdr in msg:
-                del msg[hdr]
-        # A draft authored without a Message-ID (some clients add it only at
-        # send time) would make send() return message_id=None. Inject one so
-        # the response and threading always carry a real ID. ``del`` first:
-        # it is a no-op when the header is absent, and clears a PRESENT-BUT-
-        # EMPTY ``Message-ID:`` header — without it, assigning a second
-        # Message-ID raises ValueError ("at most 1 Message-ID headers").
-        if not msg.get("Message-ID"):
-            from email.utils import make_msgid as _make_msgid
-            del msg["Message-ID"]
-            msg["Message-ID"] = _make_msgid(domain=acct.email.rsplit("@", 1)[1])
-        # A draft authored in a mail client (Outlook / Apple Mail / Thunderbird)
-        # can carry a Bcc header. If we left it on the message, send() would
-        # (a) NOT deliver to those recipients — it builds the envelope from
-        # To/Cc only — and (b) transmit the Bcc header to the To/Cc recipients,
-        # leaking the blind addresses. Extract the Bcc addresses, remove every
-        # Bcc header, and hand them to send() as true envelope BCC recipients.
-        bcc_recipients = [
-            addr for _n, addr in _getaddresses(msg.get_all("Bcc", [])) if addr
-        ]
-        del msg["Bcc"]
-        message_id = smtp_client.send(acct, creds, msg, bcc=bcc_recipients or None)
-        warning = _delete_old_draft_uid_safely(
-            c, mailbox=mailbox, uid=params.uid, trash_mailbox=acct.trash_mailbox,
-        )
-    response: dict = {
-        "account": acct.alias,
-        "message_id": message_id,
-        "draft_uid": params.uid,
-        "status": "sent",
-    }
-    if warning:
-        response["warning"] = warning
-    return response
 
 
 def forward_draft(cfg: Config, params: ForwardDraftInput) -> dict:
@@ -443,10 +368,10 @@ def forward_draft(cfg: Config, params: ForwardDraftInput) -> dict:
     if params.bcc:
         # BCC is not persisted on a draft (same as save_draft) — surface that
         # rather than silently dropping it, so the caller knows to re-enter it
-        # at send time or use send_email.
+        # at send time in their mail client.
         response["bcc_dropped"] = list(params.bcc)
         response["note"] = (
-            "BCC was not persisted on the forwarded draft (re-enter it at "
-            "send time). Use send_email if you need BCC delivered now."
+            "BCC was not persisted on the forwarded draft. Tell the user to "
+            "re-enter it in their mail client when they send."
         )
     return response

@@ -1,11 +1,17 @@
 """MCP server wiring.
 
-Tools are registered conditionally: read-only tools are always available,
-destructive tools only when ``MAIL_MCP_WRITE_ENABLED=true``, and the explicit
-``send_email`` tool only when ``MAIL_MCP_SEND_ENABLED=true``. Conditional
-*registration* — rather than a runtime flag inside a single handler — means
-the disabled tools are not even visible to the LLM, which materially reduces
-the prompt-injection surface.
+Tools are registered conditionally: read and draft tools are always
+available, organising tools (copy / move / flag) only when
+``MAIL_MCP_WRITE_ENABLED=true``, and destructive tools (delete, folder
+changes) only when ``MAIL_MCP_DESTRUCTIVE_ENABLED=true`` is set as well.
+Conditional *registration* — rather than a runtime flag inside a single
+handler — means the disabled tools are not even visible to the LLM, which
+materially reduces the prompt-injection surface.
+
+This fork cannot send mail. There is no send tool, no SMTP client and no
+switch that brings either back: a draft lands in the Drafts mailbox and the
+human sends it from their own mail client. ``tests/test_no_send.py`` fails
+if a mail-sending library is ever imported again.
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ from mcp.types import TextContent, Tool
 from . import __version__
 from .config import Config, load
 from .safety.redaction import sanitize_error
-from .tools import drafts, organize, read, send
+from .tools import drafts, organize, read
 from .tools.schemas import (
     AccountInfoInput,
     CopyEmailInput,
@@ -48,8 +54,6 @@ from .tools.schemas import (
     ReplyDraftInput,
     SaveDraftInput,
     SearchInput,
-    SendDraftInput,
-    SendEmailInput,
     SpecialFoldersInput,
     UpdateDraftInput,
 )
@@ -61,46 +65,22 @@ def write_enabled() -> bool:
     return os.environ.get("MAIL_MCP_WRITE_ENABLED", "false").lower() == "true"
 
 
-# Concrete recipe shipped in every "send tool gated" error so the LLM can
-# guide the user through enabling send in one turn instead of declaring
-# the capability missing.
-SEND_REMEDIATION = (
-    "Send tools are registered but disabled. They ship off-by-default so "
-    "a fresh install cannot transmit email until the user opts in. To "
-    "enable, add the env vars below to the mail-mcp server entry in your "
-    "MCP client config and restart the client.\n"
-    "\n"
-    "Required env vars:\n"
-    "  MAIL_MCP_WRITE_ENABLED=true\n"
-    "  MAIL_MCP_SEND_ENABLED=true\n"
-    "Optional:\n"
-    "  MAIL_MCP_SEND_HOURLY_LIMIT=20   # default 10\n"
-    "\n"
-    "Config-file paths:\n"
-    "  Claude Code     ~/.claude.json\n"
-    "  Claude Desktop  ~/Library/Application Support/Claude/"
-    "claude_desktop_config.json\n"
-    "  Codex CLI       ~/.codex/config.toml\n"
-    "\n"
-    "Example (JSON clients):\n"
-    '  "mail-mcp": {\n'
-    '    "command": "mail-mcp", "args": ["serve"],\n'
-    '    "env": {\n'
-    '      "MAIL_MCP_WRITE_ENABLED": "true",\n'
-    '      "MAIL_MCP_SEND_ENABLED": "true"\n'
-    "    }\n"
-    "  }\n"
-    "\n"
-    "After editing, the user must restart the MCP client (Claude Code: "
-    "`/exit` and reopen; Desktop: quit and relaunch). Tell the user to do "
-    "this; do NOT respond that mail-mcp lacks send capability — it has it, "
-    "it is just gated for safety."
-)
+def destructive_enabled() -> bool:
+    """True when delete and folder-changing tools may be registered.
+
+    Layered on top of the write gate: ``MAIL_MCP_DESTRUCTIVE_ENABLED`` on its
+    own does nothing, so a config that only wants move / copy / flag never
+    exposes delete by accident.
+    """
+    return (
+        write_enabled()
+        and os.environ.get("MAIL_MCP_DESTRUCTIVE_ENABLED", "false").lower() == "true"
+    )
 
 
 SERVER_INSTRUCTIONS = """\
-mail-mcp is a privacy-first IMAP/SMTP server for email. It works with every
-account configured via `mail-mcp init` (password or OAuth2 for Microsoft 365).
+mail-mcp is a privacy-first IMAP server for email. It CANNOT send mail. It
+works with every account configured via `mail-mcp init` (password or OAuth2 for Microsoft 365).
 When the user asks about email, do not guess about capabilities — this MCP
 exposes the tools listed below. Call them directly.
 
@@ -132,38 +112,28 @@ READ (always enabled):
 DRAFTS (always enabled — preferred write path):
   - save_draft, reply_draft, forward_draft, update_draft
   - A draft lands in the user's Drafts mailbox; they review and send from
-    their own mail client. Prefer drafts over send_email.
+    their own mail client. That is the only way mail leaves this account.
   - Signatures: check get_account_info → signature. If the account has one
     (html or text) and its mode is "ask" (the default), ASK the user whether
-    to add it before save_draft / reply_draft / forward_draft / send_email
-    and pass include_signature=true or false — omitting it is rejected with
-    SIGNATURE_CHOICE_REQUIRED and nothing is saved or sent. Mode "auto"
+    to add it before save_draft / reply_draft / forward_draft and pass
+    include_signature=true or false — omitting it is rejected with
+    SIGNATURE_CHOICE_REQUIRED and nothing is saved. Mode "auto"
     signs unless you pass false (only if the user says so). No signature:
     nothing to ask. The tool places it after your text and before any quote
     — do NOT type a sign-off block yourself; pass body_html for the rich
     HTML signature.
 
-DESTRUCTIVE (registered only when MAIL_MCP_WRITE_ENABLED=true):
-  - create_folder, rename_folder, delete_folder
-  - copy_email, move_email, mark_emails, delete_emails
+ORGANISE (registered only when MAIL_MCP_WRITE_ENABLED=true):
+  - copy_email, move_email, mark_emails
 
-SEND (always visible, gated at call time):
-  - send_email, send_draft — registered unconditionally so you can see
-    they exist, but the handlers refuse to transmit until the user sets
-    MAIL_MCP_WRITE_ENABLED=true AND MAIL_MCP_SEND_ENABLED=true in their
-    MCP client config and restarts the client. A call without those env
-    vars returns ``error.code = "SEND_NOT_ENABLED"`` with a step-by-step
-    remediation hint (env vars, config-file paths for Claude Code /
-    Desktop / Codex CLI, restart instruction). Both also require
-    `confirm=true` per call and count against MAIL_MCP_SEND_HOURLY_LIMIT
-    (default 10/hour/account). Drafts via save_draft are still the
-    recommended path when you don't need direct send.
+DESTRUCTIVE (registered only when MAIL_MCP_WRITE_ENABLED=true AND
+MAIL_MCP_DESTRUCTIVE_ENABLED=true):
+  - delete_emails, create_folder, rename_folder, delete_folder
 
-If you call send_email or send_draft and the response is
-``SEND_NOT_ENABLED``, do NOT tell the user "mail-mcp cannot send". The
-capability exists; it is gated for safety. Read ``error.hint``, surface
-it to the user verbatim or summarised, and tell them to add the two env
-vars + restart. Once they confirm, retry the call.
+SENDING: not available. This server has no send tool and no SMTP code, and
+no setting enables one. If the user asks you to send, save a draft and tell
+them to send it from their mail client. Never tell the user that sending
+can be switched on.
 
 Common patterns:
   * To download an email attachment: call search_emails → get_email (to see
@@ -183,10 +153,13 @@ using Graph API / manual download, it is wrong — call download_attachment.
 """
 
 
-def build_server(cfg: Config | None = None) -> Server:
-    cfg = cfg or load()
-    server: Server = Server("mail-mcp", instructions=SERVER_INSTRUCTIONS)
+def build_tool_table() -> list[tuple[Tool, type, Any]]:
+    """Return every tool the current environment allows, in registration order.
 
+    Kept separate from :func:`build_server` so the gating can be tested
+    without going through the MCP framework. A tool that is not in this
+    table is not registered: the model cannot list it or call it.
+    """
     readonly_tools: list[tuple[Tool, type, Any]] = [
         (
             Tool(
@@ -400,7 +373,7 @@ def build_server(cfg: Config | None = None) -> Server:
         ),
     ]
 
-    write_tools: list[tuple[Tool, type, Any]] = [
+    organize_tools: list[tuple[Tool, type, Any]] = [
         (
             Tool(
                 name="copy_email",
@@ -434,6 +407,9 @@ def build_server(cfg: Config | None = None) -> Server:
             MarkFlagsInput,
             organize.mark,
         ),
+    ]
+
+    destructive_tools: list[tuple[Tool, type, Any]] = [
         (
             Tool(
                 name="delete_emails",
@@ -487,50 +463,18 @@ def build_server(cfg: Config | None = None) -> Server:
         ),
     ]
 
-    send_tool: list[tuple[Tool, type, Any]] = [
-        (
-            Tool(
-                name="send_draft",
-                description=(
-                    "Send an existing draft via SMTP and remove it from Drafts. "
-                    "Gated by MAIL_MCP_SEND_ENABLED + confirm=true."
-                ),
-                inputSchema=SendDraftInput.model_json_schema(),
-                annotations={"destructiveHint": True, "openWorldHint": True},
-            ),
-            SendDraftInput,
-            drafts.send_draft,
-        ),
-        (
-            Tool(
-                name="send_email",
-                description=(
-                    "Send an email via SMTP. Gated by environment variables "
-                    "and requires confirm=true. Prefer save_draft unless you "
-                    "really intend to send without human review. For rich/"
-                    "formatted email pass the HTML in body_html (with a "
-                    "plain-text version in body)."
-                ),
-                inputSchema=SendEmailInput.model_json_schema(),
-                annotations={"destructiveHint": True, "openWorldHint": True},
-            ),
-            SendEmailInput,
-            send.send_email,
-        ),
-    ]
-
-    # Send tools are registered unconditionally so the LLM always sees that
-    # ``send_email`` / ``send_draft`` exist and can guide the user through
-    # enabling them when needed. The security gate is unchanged: each handler
-    # checks ``MAIL_MCP_WRITE_ENABLED`` + ``MAIL_MCP_SEND_ENABLED`` at call
-    # time and raises :class:`SendDisabled`, which the classifier maps to a
-    # ``SEND_NOT_ENABLED`` error with the exact remediation receipt. Without
-    # this, agents that don't read the ``instructions`` block end up telling
-    # users "mail-mcp can't send email" and recommending other servers.
     registered = list(readonly_tools)
     if write_enabled():
-        registered.extend(write_tools)
-    registered.extend(send_tool)
+        registered.extend(organize_tools)
+    if destructive_enabled():
+        registered.extend(destructive_tools)
+    return registered
+
+
+def build_server(cfg: Config | None = None) -> Server:
+    cfg = cfg or load()
+    server: Server = Server("mail-mcp", instructions=SERVER_INSTRUCTIONS)
+    registered = build_tool_table()
 
     tool_map = {tool.name: (schema, handler) for tool, schema, handler in registered}
 
@@ -553,7 +497,7 @@ def build_server(cfg: Config | None = None) -> Server:
         started = time.perf_counter()
         try:
             parsed = schema.model_validate(arguments or {})
-            # Hand the synchronous IMAP/SMTP work off to a worker thread so
+            # Hand the synchronous IMAP work off to a worker thread so
             # the stdio event loop can dispatch other tool calls in parallel.
             result = await asyncio.to_thread(handler, cfg, parsed)
         except Exception as exc:  # noqa: BLE001 - surfaced to caller sanitised
@@ -585,59 +529,25 @@ def _classify(exc: BaseException) -> dict[str, Any]:
     hint: str | None = None
     retryable = False
 
-    if cls == "RateLimited":
-        code = "RATE_LIMITED"
-        hint = (
-            "The per-account hourly send ceiling was reached. "
-            "Raise MAIL_MCP_SEND_HOURLY_LIMIT or wait ~1 hour."
-        )
-        # NOT retryable: the limit uses a sliding 1-hour window, so an
-        # immediate retry just re-trips it and burns another rejected
-        # attempt. An agent honouring retryable=True would busy-retry
-        # against its own hint to "wait ~1 hour".
-        retryable = False
-    elif cls == "PartialDeliveryError":
-        code = "PARTIAL_DELIVERY"
-        hint = (
-            "The SMTP server accepted the message for some recipients but "
-            "refused others. The message may already have been delivered to "
-            "the accepted recipients — do NOT blindly resend to everyone or "
-            "you will double-send. Tell the user which recipients were "
-            "refused (see the error message) and resend only to those after "
-            "fixing the addresses."
-        )
-    elif cls == "SendDisabled":
-        send_code = getattr(exc, "code", "SEND_NOT_ENABLED")
-        if send_code == "SEND_REQUIRES_CONFIRM":
-            code = "SEND_REQUIRES_CONFIRM"
-            hint = (
-                "Re-issue the call with confirm=true. This is a per-call "
-                "safety, not a configuration issue. The user has already "
-                "enabled send via the env-var gate; you just need to pass "
-                "confirm=true in the arguments."
-            )
-        else:
-            code = "SEND_NOT_ENABLED"
-            hint = SEND_REMEDIATION
-    elif cls == "SignatureChoiceRequired":
+    if cls == "SignatureChoiceRequired":
         code = "SIGNATURE_CHOICE_REQUIRED"
         hint = (
             "The account has a signature and asks before using it. Ask the "
             "user whether to add their signature to this message, then call "
             "the same tool again with include_signature=true or "
-            "include_signature=false. Nothing was saved or sent."
+            "include_signature=false. Nothing was saved."
         )
     elif cls == "OperationDisabled":
         code = "PERMISSION_DENIED"
         hint = (
-            "This tool is gated behind an environment flag. "
-            "Start the server with the required env var, e.g. "
-            "MAIL_MCP_WRITE_ENABLED=true, and re-register the MCP client."
+            "This operation is gated behind an environment flag that only "
+            "the user can set in their MCP client config (the error message "
+            "names it). Tell the user; do not retry."
         )
     elif cls == "ValidationError" or "validation" in lower:
         code = "VALIDATION_ERROR"
         hint = "Review the tool schema and resubmit with corrected arguments."
-    elif "authentication" in lower or "badcredentials" in lower or cls in {"LoginError", "SMTPAuthenticationError"}:
+    elif "authentication" in lower or "badcredentials" in lower or cls == "LoginError":
         code = "AUTH_FAILED"
         hint = (
             "Credentials were rejected. For Gmail / iCloud / Outlook.com "
@@ -678,11 +588,11 @@ async def run_stdio() -> None:
     except RuntimeError:
         default_alias = "(none)"
     log.warning(
-        "mail-mcp %s ready on stdio | account=%s | write=%s | send=%s",
+        "mail-mcp %s ready on stdio | account=%s | write=%s | destructive=%s | send=unavailable",
         __version__,
         default_alias,
         write_enabled(),
-        send.is_enabled(),
+        destructive_enabled(),
     )
     server = build_server(cfg=cfg)
     async with stdio_server() as (read_stream, write_stream):

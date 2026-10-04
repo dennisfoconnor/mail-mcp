@@ -1,11 +1,9 @@
-"""SMTP wrapper built on :mod:`smtplib`.
+"""Message builders for drafts. This module does NOT talk to any server.
 
-Only two transport modes are supported:
-
-* **SMTPS** (``smtp_starttls=False``, port 465) — implicit TLS.
-* **SMTP + STARTTLS** (``smtp_starttls=True``, typically port 587) — the
-  connection upgrades to TLS before authentication. Plain SMTP on port 25
-  without STARTTLS is refused.
+The file keeps its upstream name (``smtp_client``) so the fork stays easy to
+merge, but in this fork the SMTP half is gone: there is no ``send``, no
+login test and no ``smtplib`` import. What remains builds the MIME messages
+that the draft tools APPEND to the Drafts mailbox over IMAP.
 
 Messages are built with :class:`email.message.EmailMessage`, which encodes
 headers per RFC 5322 and rejects CRLF in header values — a strong structural
@@ -18,13 +16,9 @@ import email
 import email.policy
 import html as _html_lib
 import re
-import smtplib
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, getaddresses, make_msgid, parseaddr
-from typing import Any
 
-from .config import AccountModel
-from .safety.tls import create_tls_context
 from .safety.validation import (
     ValidationError,
     validate_email_address,
@@ -35,28 +29,6 @@ RE_PREFIX = "Re: "
 FWD_PREFIX = "Fwd: "
 MAX_QUOTED_LINES = 400
 _CLOSING_BODY_RE = re.compile(r"</body\s*>", re.IGNORECASE)
-
-
-class PartialDeliveryError(RuntimeError):
-    """Raised when SMTP accepted the message for some recipients but refused others.
-
-    ``smtplib.SMTP.send_message`` does not raise when at least one recipient
-    is accepted — it returns the refused ones. We turn that into an error so
-    the send tools never report a clean ``message_id`` while some recipients
-    silently received nothing. ``refused`` is the ``{addr: (code, msg)}`` dict
-    smtplib returns; ``message_id`` is the ID of the message that was (partly)
-    sent so the caller can locate it.
-    """
-
-    def __init__(self, message_id: str, refused: dict) -> None:
-        self.message_id = message_id
-        self.refused = refused
-        addrs = ", ".join(sorted(refused)) if refused else "(unknown)"
-        super().__init__(
-            f"message {message_id} was accepted for some recipients but the "
-            f"server refused: {addrs}. The message may have been delivered to "
-            "the others; do not retry blindly."
-        )
 
 
 def _has_rfc822_headers(inner: EmailMessage) -> bool:
@@ -472,112 +444,3 @@ def _sanitize_attachment_name(value: str) -> str:
     cleaned = "".join(c for c in value if c.isprintable() and c not in '\\/:*?"<>|\r\n\0')
     cleaned = cleaned.strip() or "forwarded-message"
     return cleaned[:60]
-
-
-def _smtp_authenticate(server: smtplib.SMTP, account: AccountModel, credential: Any) -> None:
-    """Authenticate an already-open SMTP session with password or XOAUTH2.
-
-    Kept small and side-effect-only: callers hand us an already-EHLO'd
-    server and we leave it ready to ``send_message``. The OAuth branch
-    uses :meth:`smtplib.SMTP.auth` with a callback that returns the raw
-    XOAUTH2 SASL string. Per ``smtplib`` documentation the callback's
-    return value is base64-encoded by ``smtplib`` itself before being
-    sent on the wire — so we MUST hand back the raw SASL bytes, not a
-    pre-encoded string. (Until v0.3.7 we double-encoded, which made
-    Microsoft 365 SMTP OAuth fail even when token acquisition and IMAP
-    OAuth worked.)
-    """
-    from .credentials import AuthCredential  # local import avoids a cycle
-
-    # ``smtp_username`` (optional) overrides the SMTP login identity only — see
-    # AccountModel. IMAP and the From header keep using ``account.email``.
-    override = account.smtp_username
-
-    if isinstance(credential, AuthCredential):
-        login_user = override or credential.username
-        if credential.kind == "oauth2":
-            from . import oauth
-
-            xoauth2 = oauth.build_xoauth2(login_user, credential.secret)
-            # ``smtplib.SMTP.auth`` (CPython smtplib.py) calls the callback
-            # with the server challenge and base64-encodes whatever it
-            # returns. Returning a string-decoded ASCII view of the raw
-            # SASL bytes is the supported shape — anything already base64
-            # would be encoded a second time and rejected as
-            # ``535 5.7.3 Authentication unsuccessful``.
-            sasl = xoauth2.decode("ascii")
-            server.auth("XOAUTH2", lambda _challenge="": sasl, initial_response_ok=True)
-            return
-        server.login(login_user, credential.secret)
-        return
-    # Legacy str path (password). Preserved for the wizard's pre-save check.
-    server.login(override or account.email, credential)
-
-
-def test_login(account: AccountModel, credential: Any, *, timeout: float = 15.0) -> None:
-    """Authenticate against the account's SMTP server and close the session.
-
-    Used by the interactive wizard to verify the user's credentials before
-    saving them. Accepts either a raw password string or an
-    :class:`AuthCredential`. Raises the underlying :mod:`smtplib` exception
-    on failure.
-    """
-    ctx = create_tls_context()
-    if account.smtp_starttls:
-        with smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=timeout) as server:
-            server.ehlo()
-            server.starttls(context=ctx)
-            server.ehlo()
-            _smtp_authenticate(server, account, credential)
-    else:
-        with smtplib.SMTP_SSL(
-            account.smtp_host, account.smtp_port, context=ctx, timeout=timeout
-        ) as server:
-            _smtp_authenticate(server, account, credential)
-
-
-def send(
-    account: AccountModel,
-    credential: Any,
-    msg: EmailMessage,
-    *,
-    bcc: list[str] | None = None,
-) -> str:
-    """Deliver ``msg`` via SMTP, enforcing TLS.
-
-    ``credential`` is either a raw password string or an
-    :class:`AuthCredential` (password or OAuth2). ``bcc`` entries are added
-    to the envelope recipients but never appear as a header. Returns the
-    message's ``Message-ID``.
-    """
-    ctx = create_tls_context()
-    # Extract envelope recipients with getaddresses, NOT a naive comma-split:
-    # a display name containing a comma (``"Smith, John" <john@x>``) would be
-    # fragmented into bogus recipients by ``split(",")``. Messages built by
-    # build_message join validated bare addresses, but send_draft re-sends a
-    # draft that may have been edited in a mail client with display names.
-    recipients = [
-        addr for _, addr in getaddresses([msg.get("To", ""), msg.get("Cc", "")]) if addr
-    ]
-    recipients.extend(bcc or [])
-    if account.smtp_starttls:
-        with smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=30) as server:
-            server.ehlo()
-            server.starttls(context=ctx)
-            server.ehlo()
-            _smtp_authenticate(server, account, credential)
-            refused = server.send_message(msg, from_addr=account.email, to_addrs=recipients)
-    else:
-        with smtplib.SMTP_SSL(
-            account.smtp_host, account.smtp_port, context=ctx, timeout=30
-        ) as server:
-            _smtp_authenticate(server, account, credential)
-            refused = server.send_message(msg, from_addr=account.email, to_addrs=recipients)
-    # ``send_message`` returns a (possibly empty) dict of recipients the server
-    # refused. It does NOT raise when *some* recipients are accepted and others
-    # rejected — it just returns them here. Surfacing this prevents the
-    # send-path sibling of the silent-attachment-drop bug: reporting a
-    # message_id as full success while some recipients silently got nothing.
-    if refused:
-        raise PartialDeliveryError(msg["Message-ID"], refused)
-    return msg["Message-ID"]

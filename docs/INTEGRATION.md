@@ -85,14 +85,16 @@ Enable the destructive tools only when you actually want them exposed:
 }
 ```
 
-And, separately, for true one-click send (not recommended for everyday use — prefer `save_draft`):
+And, separately, to also allow delete and folder changes:
 
 ```json
 "env": {
   "MAIL_MCP_WRITE_ENABLED": "true",
-  "MAIL_MCP_SEND_ENABLED": "true"
+  "MAIL_MCP_DESTRUCTIVE_ENABLED": "true"
 }
 ```
+
+This fork cannot send mail; there is no switch for it.
 
 Restart Claude Desktop for the changes to take effect.
 
@@ -124,9 +126,9 @@ command = "/absolute/path/to/mail-mcp"
 args    = ["serve"]
 
 [mcp_servers.mail-mcp.env]
-# Optional — uncomment to enable destructive tools.
-# MAIL_MCP_WRITE_ENABLED = "true"
-# MAIL_MCP_SEND_ENABLED  = "true"
+# Optional — uncomment to enable copy/move/flag, then delete + folder tools.
+# MAIL_MCP_WRITE_ENABLED       = "true"
+# MAIL_MCP_DESTRUCTIVE_ENABLED = "true"
 ```
 
 ## 5. Smoke test

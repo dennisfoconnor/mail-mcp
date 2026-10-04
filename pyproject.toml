@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mail-mcp"
-version = "0.7.0"
-description = "A privacy-first IMAP/SMTP MCP server for Claude Desktop, Claude Code, and Codex CLI."
+version = "0.7.0+nosend.1"
+description = "A privacy-first IMAP MCP server for Claude Desktop, Claude Code, and Codex CLI. No-send fork: reads, organises and drafts mail, cannot send."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Mario Hernández", email = "developer@supera.dev" }]
-keywords = ["mcp", "imap", "smtp", "email", "claude", "codex", "keychain"]
+keywords = ["mcp", "imap", "email", "claude", "codex", "keychain", "drafts"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -57,9 +57,10 @@ oauth-microsoft = [
 mail-mcp = "mail_mcp.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/mario-hernandez/mail-mcp"
-Repository = "https://github.com/mario-hernandez/mail-mcp"
-Issues = "https://github.com/mario-hernandez/mail-mcp/issues"
+Homepage = "https://github.com/dennisfoconnor/mail-mcp"
+Repository = "https://github.com/dennisfoconnor/mail-mcp"
+Issues = "https://github.com/dennisfoconnor/mail-mcp/issues"
+Upstream = "https://github.com/mario-hernandez/mail-mcp"
 Security = "https://github.com/mario-hernandez/mail-mcp/security/policy"
 
 [tool.hatch.build.targets.wheel]

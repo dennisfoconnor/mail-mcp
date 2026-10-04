@@ -1,8 +1,8 @@
 """Per-account email signatures.
 
 Each account may carry an HTML and/or a plain-text signature that the write
-tools (``save_draft``, ``reply_draft``, ``forward_draft``, ``update_draft``
-when the body is replaced, and ``send_email``) append after the caller's text
+tools (``save_draft``, ``reply_draft``, ``forward_draft`` and ``update_draft``
+when the body is replaced) append after the caller's text
 and before any quoted message — the placement Outlook and Apple Mail use.
 
 Where the files come from:

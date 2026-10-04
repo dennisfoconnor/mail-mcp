@@ -142,8 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="mail-mcp CLI",
         epilog=(
             "Environment variables:\n"
-            "  MAIL_MCP_WRITE_ENABLED=true          enable move/mark/delete tools\n"
-            "  MAIL_MCP_SEND_ENABLED=true           enable send_email (requires write)\n"
+            "  MAIL_MCP_WRITE_ENABLED=true          enable copy/move/mark tools\n"
+            "  MAIL_MCP_DESTRUCTIVE_ENABLED=true    also enable delete + folder tools (requires write)\n"
             "  MAIL_MCP_ALLOW_PERMANENT_DELETE=true allow expunge instead of trash\n"
             "  MAIL_MCP_LOG_LEVEL=INFO              default WARNING; use DEBUG for tracing\n"
             "  MAIL_MCP_IMAP_CONNECT_TIMEOUT=15     IMAP TCP/TLS connect timeout (seconds)\n"
@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument(
         "--connect",
         action="store_true",
-        help="also authenticate against each account's IMAP+SMTP servers",
+        help="also authenticate against each account's IMAP server",
     )
     doctor.set_defaults(func=_cmd_doctor)
 

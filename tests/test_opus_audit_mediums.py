@@ -7,8 +7,8 @@
    "Authorization: Bearer <token>" leaked the token blob.
 3. get_thread kept the OLDEST messages and reported the truncated count as
    thread_size.
-4. send_draft silently dropped (and leaked) a Bcc header carried by an
-   externally-authored draft.
+4. (upstream only: send_draft and a draft's Bcc header. The no-send fork
+   removed send_draft and its test.)
 5. forward_draft accepted bcc, validated it, then silently dropped it.
 """
 
@@ -130,67 +130,6 @@ def test_get_thread_keeps_newest_and_reports_true_size(monkeypatch):
     assert out["thread_size"] == 5, "true size, not the truncated count"
     assert fetched_uids["uids"] == [3, 4, 5], "newest three kept, oldest dropped"
     assert any("newest" in n for n in out["notes"]), "truncation must be announced"
-
-
-# ---------- MED: send_draft delivers + de-headers a draft's Bcc ----------
-
-def test_send_draft_delivers_bcc_from_draft_header_and_strips_it(monkeypatch):
-    from contextlib import contextmanager
-    from pathlib import Path
-
-    from mail_mcp import imap_client, smtp_client
-    from mail_mcp.config import AccountModel, Config, ConfigModel
-    from mail_mcp.credentials import AuthCredential
-    from mail_mcp.tools import send as send_mod
-    from mail_mcp.tools.drafts import send_draft
-    from mail_mcp.tools.schemas import SendDraftInput
-
-    monkeypatch.setenv("MAIL_MCP_WRITE_ENABLED", "true")
-    monkeypatch.setenv("MAIL_MCP_SEND_ENABLED", "true")
-    send_mod._reset_for_tests()
-
-    acct = AccountModel(
-        alias="t", email="me@example.com",
-        imap_host="imap.example.com", smtp_host="smtp.example.com",
-        drafts_mailbox="Drafts", trash_mailbox="Trash",
-    )
-    cfg = Config(path=Path("/tmp/x"), model=ConfigModel(accounts=[acct]))
-
-    draft = EmailMessage(policy=email.policy.default)
-    draft["From"] = "me@example.com"
-    draft["To"] = "to@example.com"
-    draft["Bcc"] = "secret1@example.com, secret2@example.com"
-    draft["Subject"] = "hi"
-    draft["Message-ID"] = "<d@example.com>"
-    draft.set_content("body")
-    draft_bytes = draft.as_bytes()
-
-    captured = {}
-
-    @contextmanager
-    def fake_connect(account, creds):
-        yield MagicMock()
-
-    monkeypatch.setattr(imap_client, "fetch_raw_message", lambda c, *, mailbox, uid: (draft_bytes, {}))
-    monkeypatch.setattr("mail_mcp.tools.drafts._drafts_mailbox_strict", lambda c, a, m, tool: "Drafts")
-    monkeypatch.setattr(imap_client, "connect", fake_connect)
-    monkeypatch.setattr("mail_mcp.tools.drafts._delete_old_draft_uid_safely", lambda *a, **k: None)
-    monkeypatch.setattr(
-        "mail_mcp.tools.drafts.resolve_auth",
-        lambda a: AuthCredential(kind="password", username=a.email, secret="x"),
-    )
-
-    def fake_send(account, creds, msg, *, bcc=None):
-        captured["bcc"] = bcc
-        captured["msg_has_bcc_header"] = msg.get("Bcc") is not None
-        return msg["Message-ID"]
-
-    monkeypatch.setattr(smtp_client, "send", fake_send)
-
-    send_draft(cfg, SendDraftInput(account="t", uid=1, confirm=True))
-
-    assert captured["bcc"] == ["secret1@example.com", "secret2@example.com"], "Bcc delivered as envelope recipients"
-    assert captured["msg_has_bcc_header"] is False, "Bcc header stripped from the transmitted message"
 
 
 # ---------- MED: forward_draft surfaces the dropped bcc ----------

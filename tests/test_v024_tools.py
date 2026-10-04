@@ -65,14 +65,12 @@ def test_thread_references_flattens_nested_tree():
 def test_attachment_resolver_rejects_outside_allowlist(tmp_path):
     stray = tmp_path / "stray.txt"
     stray.write_text("x")
-    # tmp_path from pytest is NOT under ~/Downloads or ~/Documents/mail-mcp-outbox,
-    # and usually not under $TMPDIR either (varies by platform). Ensure we
-    # override MAIL_MCP_ATTACHMENT_DIR to something that deliberately excludes it.
+    # tmp_path from pytest is NOT under ~/Documents/mail-mcp-outbox. Point
+    # MAIL_MCP_ATTACHMENT_DIR at something that deliberately excludes it and
+    # exercise the real allowlist (no patching of _allowed_roots).
     with patch.dict(os.environ, {"MAIL_MCP_ATTACHMENT_DIR": "/nonexistent-for-this-test"}, clear=False):
-        # Strip the system TMPDIR too to make the exclusion deterministic on macOS.
-        with patch.object(att_mod, "_allowed_roots", return_value=[att_mod.Path.home() / "Downloads"]):
-            with pytest.raises(ValidationError, match="outside the allowed"):
-                att_mod.resolve(raw_path=str(stray), filename_override=None, content_type_override=None)
+        with pytest.raises(ValidationError, match="outside the allowed"):
+            att_mod.resolve(raw_path=str(stray), filename_override=None, content_type_override=None)
 
 
 def test_attachment_resolver_infers_content_type(tmp_path):

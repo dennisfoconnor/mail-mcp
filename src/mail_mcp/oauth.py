@@ -15,15 +15,14 @@ Design choices
 * **Tenant-scoped by default.** ``AccountModel.oauth_tenant`` is the tenant ID
   (a GUID, or a verified domain). ``common`` works but we discourage it —
   tenant-scoped apps reject tokens from other tenants out of the box.
-* **Scopes.** ``IMAP.AccessAsUser.All``, ``SMTP.Send``, ``offline_access``.
+* **Scopes.** ``IMAP.AccessAsUser.All``, ``offline_access``.
   ``offline_access`` is required to receive a refresh token; without it the
   user would be prompted to re-authenticate every hour.
 * **In-memory access-token cache.** Refresh tokens persist in the OS keyring;
   access tokens live only in this process. On each ``resolve_auth`` call we
   silently refresh if the cached token is within 60 s of expiry.
-* **XOAUTH2 SASL.** The format is ``user=<email>\\x01auth=Bearer <token>\\x01\\x01``,
-  base64-encoded by the caller when needed (``imapclient`` does it internally;
-  ``smtplib`` expects raw bytes via the auth callback).
+* **XOAUTH2 SASL.** ``imapclient.oauth2_login`` builds and encodes the SASL
+  payload itself from the raw access token, so this module does not.
 
 MSAL is an optional dependency (``mail-mcp[oauth-microsoft]``). Importing this
 module without MSAL installed raises a clear :class:`OAuthNotInstalled` on
@@ -38,13 +37,13 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-# Scopes required for full IMAP + SMTP access. ``offline_access`` is
+# Scope required for IMAP access. This fork never sends, so it does not ask
+# Microsoft for ``SMTP.Send``. ``offline_access`` is
 # intentionally NOT listed here — MSAL treats it as a reserved scope and
 # rejects any app that passes it explicitly; it always requests a refresh
 # token for public clients automatically.
 SCOPES: tuple[str, ...] = (
     "https://outlook.office.com/IMAP.AccessAsUser.All",
-    "https://outlook.office.com/SMTP.Send",
 )
 
 # When an access token expires within this many seconds we refresh eagerly
@@ -238,17 +237,3 @@ def clear_cache(alias: str | None = None) -> None:
         _TOKEN_CACHE.clear()
     else:
         _TOKEN_CACHE.pop(alias, None)
-
-
-def build_xoauth2(email: str, access_token: str) -> bytes:
-    """Produce the SASL XOAUTH2 payload used by both IMAP and SMTP.
-
-    The format is fixed by RFC draft-ietf-kitten-sasl-oauth; the separator
-    byte is ``\\x01`` (SOH). ``imapclient.oauth2_login`` expects the raw
-    access token (it wraps this internally), but SMTP via :mod:`smtplib`
-    requires the full byte string returned here, encoded by the caller.
-    """
-    if not email or not access_token:
-        raise OAuthError("email and access_token must be non-empty")
-    payload = f"user={email}\x01auth=Bearer {access_token}\x01\x01"
-    return payload.encode("utf-8")

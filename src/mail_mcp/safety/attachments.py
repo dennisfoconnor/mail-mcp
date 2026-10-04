@@ -3,11 +3,17 @@
 Resolving an LLM-supplied attachment path has to refuse two specific attacks:
 
 * **Path traversal** — ``/etc/passwd`` dressed up as an attachment would
-  happily exfiltrate data to the recipient. We resolve the path (following
-  symlinks, ``strict=True``) and check that the result is a descendant of a
-  small allowlist rooted at the user's home.
-* **Size amplification** — a 2 GB file would blow up the SMTP session. Per
+  happily copy data into a draft that syncs to the mail provider. We resolve
+  the path (following symlinks, ``strict=True``) and check that the result is
+  a descendant of a small allowlist.
+* **Size amplification** — a 2 GB file would blow up the IMAP APPEND. Per
   file and per message caps are enforced before we open the file for read.
+
+The allowlist in this fork is deliberately narrow: one dedicated outbox
+folder (``~/Documents/mail-mcp-outbox``) plus whatever the user names in
+``MAIL_MCP_ATTACHMENT_DIR``. Upstream also allowed ``~/Downloads`` and the
+temp directory, which let a prompt-injected model attach anything the user
+had ever downloaded; a file now has to be put in the outbox on purpose.
 """
 
 from __future__ import annotations
@@ -25,15 +31,10 @@ MAX_TOTAL_ATTACHMENT_BYTES = 50 * 1024 * 1024
 
 
 def _allowed_roots() -> list[Path]:
-    roots = [
-        Path.home() / "Downloads",
-        Path.home() / "Documents" / "mail-mcp-outbox",
-    ]
+    roots = [Path.home() / "Documents" / "mail-mcp-outbox"]
     extra = os.environ.get("MAIL_MCP_ATTACHMENT_DIR")
     if extra:
         roots.append(Path(extra).expanduser())
-    tmp = Path(os.environ.get("TMPDIR", "/tmp"))  # noqa: S108 — opt-in allowlist root, not a secret sink
-    roots.append(tmp)
     return [r.expanduser() for r in roots]
 
 
@@ -76,7 +77,8 @@ def resolve(
     if not allowed:
         raise ValidationError(
             "attachment path is outside the allowed directories "
-            "(~/Downloads, ~/Documents/mail-mcp-outbox, $TMPDIR, or $MAIL_MCP_ATTACHMENT_DIR)"
+            "(~/Documents/mail-mcp-outbox or $MAIL_MCP_ATTACHMENT_DIR). Ask the "
+            "user to put the file in the outbox folder."
         )
     size = resolved.stat().st_size
     if size > MAX_ATTACHMENT_BYTES:
