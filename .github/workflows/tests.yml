@@ -1,0 +1,94 @@
+name: Tests
+
+# Runs on every pull request and on every push to main (which includes
+# merges). The guard tests in tests/test_no_send.py,
+# tests/test_server_gating.py and tests/test_destructive_guards.py are part
+# of the unit suite, so a change that brings back sending or a way to destroy
+# mail fails here.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Read-only token: these jobs only check out code and run tests.
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request supersedes the older run.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: python -m pip install "ruff>=0.5.0"
+      - name: ruff check
+        run: ruff check src tests
+
+  unit:
+    name: Unit tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+        include:
+          # macOS is where this server actually runs.
+          - os: macos-latest
+            python-version: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Show resolved versions
+        run: python -m pip list --format=freeze | grep -i -E "^(mcp|imapclient|keyring|pydantic|pytest)="
+      # The integration suite needs Docker and its own extras; it has its
+      # own job below.
+      - name: pytest
+        run: python -m pytest --ignore=tests/integration -ra
+
+  integration:
+    name: Integration tests (GreenMail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e ".[dev,integration]"
+      - name: Docker is available
+        run: docker info --format '{{.ServerVersion}}'
+      # Starts a throwaway GreenMail mail server in Docker and runs the tools
+      # against it end to end.
+      - name: pytest (integration)
+        env:
+          MAIL_MCP_INTEGRATION: "1"
+        run: python -m pytest tests/integration -m integration -ra
