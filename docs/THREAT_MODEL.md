@@ -29,7 +29,7 @@ Mitigations:
 - Email bodies are wrapped in `<untrusted_email_content>` with a warning prefix (`src/mail_mcp/safety/guards.py`). The closing tag is escaped if it appears in the body so the attacker cannot break out.
 - Zero-width characters (U+200B, U+200C, U+FEFF, etc.) are stripped before wrapping.
 - `forward` is not implemented in v0.1. Forwarding through `save_draft` goes to the user's Drafts folder, which the human reviews manually before sending.
-- `send_email` requires an environment flag *plus* `confirm=true` *plus* the LLM picking a recipient the user did not attack with.
+- There is no `send_email`. This fork has no send tool and no SMTP code, so a successful injection cannot transmit anything; the most it can do is leave a draft for the human to review.
 
 ### 2. A prompt-injected LLM
 
@@ -38,7 +38,8 @@ Goal: exfiltrate mail by writing a draft to the attacker, or delete emails to co
 Mitigations:
 
 - Mutating tools are registered only when `MAIL_MCP_WRITE_ENABLED=true`. If you never set it, the model *cannot see* the write tools and cannot call them.
-- `send_email` requires a second env flag (`MAIL_MCP_SEND_ENABLED=true`), which is not needed for the common draft/review workflow.
+- Sending is not available under any flag. Delete and folder changes need a second flag (`MAIL_MCP_DESTRUCTIVE_ENABLED=true`) on top of the write flag.
+- Draft attachments can only come from `~/Documents/mail-mcp-outbox` (or `MAIL_MCP_ATTACHMENT_DIR`), so an injected model cannot pull arbitrary downloaded files into a draft.
 - `delete_emails` defaults to Trash; permanent delete requires a third env flag and explicit `confirm=true`.
 - Structured IMAP SEARCH (no string concat) prevents the LLM from crafting queries that bypass filters.
 
@@ -49,7 +50,7 @@ Goal: learn the user's password or read email in transit.
 Mitigations:
 
 - TLS is non-optional. The code path that would allow `ssl=False` for IMAP raises a `ValidationError` during `connect()`.
-- STARTTLS is forced for SMTP 587. Plain SMTP is refused.
+- This fork never opens an SMTP connection.
 - Certificate verification uses `ssl.create_default_context()` and is never overridden.
 
 ### 4. Malware running as your user

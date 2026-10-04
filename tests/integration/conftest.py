@@ -210,8 +210,8 @@ def patched_tls() -> Iterator[None]:
     GreenMail's self-signed cert (``CN=localhost``) is legitimately rejected
     by :func:`mail_mcp.safety.tls.create_tls_context` in production — there is
     no runtime opt-out, which is the point. For tests we monkey-patch the
-    helper at the package boundary so both :mod:`imap_client` and
-    :mod:`smtp_client` pick up the unverified context transparently.
+    helper at the package boundary so :mod:`imap_client` picks up the
+    unverified context transparently.
 
     The patch lives for the whole session (session-scope, autouse) and is
     torn down automatically when the context-manager exits.
@@ -229,7 +229,6 @@ def patched_tls() -> Iterator[None]:
     binding_sites = [
         "mail_mcp.safety.tls.create_tls_context",
         "mail_mcp.imap_client.create_tls_context",
-        "mail_mcp.smtp_client.create_tls_context",
         "mail_mcp.autoconfig.create_tls_context",
     ]
     from contextlib import ExitStack
@@ -279,9 +278,9 @@ def test_account(greenmail: dict[str, Any]) -> AccountModel:
 
     Notes on transport choice:
     * ``imap_use_ssl=True`` + port 3993 → IMAPS (implicit TLS).
-    * ``smtp_starttls=False`` + port 3465 → SMTPS (implicit TLS). With this
-      flag, :func:`mail_mcp.smtp_client.send` uses :class:`smtplib.SMTP_SSL`,
-      which is what GreenMail expects on 3465.
+    * ``smtp_starttls=False`` + port 3465 → SMTPS (implicit TLS). Only the
+      test helper that seeds mail into GreenMail uses it; the package itself
+      has no SMTP client in this fork.
     """
     short = uuid.uuid4().hex[:8]
     alias = f"greenmail-{short}"

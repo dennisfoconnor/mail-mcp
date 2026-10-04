@@ -602,7 +602,7 @@ def save_draft(
     be a stale default like ``"Drafts"`` when the real mailbox is
     ``Borradores`` / ``Brouillons`` / ``Entwürfe``. Surfacing the
     resolved name lets callers report it in their tool result so
-    downstream ``update_draft`` / ``send_draft`` / ``get_email`` calls
+    downstream ``update_draft`` / ``get_email`` calls
     target the right folder.
 
     Servers that advertise UIDPLUS (RFC 4315) reply with
@@ -845,8 +845,8 @@ class UIDPlusRequired(RuntimeError):
 
     Carries a stable ``code`` so callers (and the MCP error classifier) can
     branch on it programmatically. The ``mark_deleted`` fallback is the
-    safe alternative for caller-side mutations like ``update_draft`` /
-    ``send_draft`` that only intend to remove a single UID they just
+    safe alternative for caller-side mutations like ``update_draft``
+    that only intend to remove a single UID they just
     created — leaving a ``\\Deleted``-flagged duplicate is preferable to
     expunging unrelated messages another client has already flagged.
     """

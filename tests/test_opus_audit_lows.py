@@ -13,14 +13,7 @@ from mail_mcp.autoconfig import DiscoveryError
 from mail_mcp.safety.validation import ValidationError
 from mail_mcp.server import _classify
 
-# ---------- server.py: RATE_LIMITED not retryable; socket.timeout removed ----------
-
-def test_rate_limited_is_not_retryable():
-    from mail_mcp.tools.send import RateLimited
-
-    out = _classify(RateLimited("limit reached"))
-    assert out["code"] == "RATE_LIMITED"
-    assert out["retryable"] is False  # sliding window won't clear on immediate retry
+# ---------- server.py: socket.timeout removed ----------
 
 
 def test_timeout_still_retryable_after_socket_timeout_removed():
@@ -140,64 +133,6 @@ def test_bool_arg_strict():
 
 
 # ---------- verification-round fixes (BLOCK verdict, then resolved) ----------
-
-def test_send_draft_message_id_injection_handles_present_but_empty_header(monkeypatch):
-    """A draft with a blank ``Message-ID:`` header must not crash send_draft.
-
-    Regression introduced by the Message-ID-injection fix and caught by the
-    adversarial verification: assigning a second Message-ID when an empty one
-    is present raises ValueError; the fix must ``del`` it first.
-    """
-    from contextlib import contextmanager
-    from pathlib import Path
-
-    from mail_mcp import imap_client, smtp_client
-    from mail_mcp.config import AccountModel, Config, ConfigModel
-    from mail_mcp.credentials import AuthCredential
-    from mail_mcp.tools import send as send_mod
-    from mail_mcp.tools.drafts import send_draft
-    from mail_mcp.tools.schemas import SendDraftInput
-
-    monkeypatch.setenv("MAIL_MCP_WRITE_ENABLED", "true")
-    monkeypatch.setenv("MAIL_MCP_SEND_ENABLED", "true")
-    send_mod._reset_for_tests()
-
-    acct = AccountModel(
-        alias="t", email="me@example.com",
-        imap_host="imap.example.com", smtp_host="smtp.example.com",
-        drafts_mailbox="Drafts", trash_mailbox="Trash",
-    )
-    cfg = Config(path=Path("/tmp/x"), model=ConfigModel(accounts=[acct]))
-    # Present-but-EMPTY Message-ID header.
-    draft_bytes = (
-        b"From: me@example.com\r\nTo: to@example.com\r\n"
-        b"Message-ID: \r\nSubject: x\r\n\r\nbody\r\n"
-    )
-    captured = {}
-
-    @contextmanager
-    def fake_connect(account, creds):
-        yield MagicMock()
-
-    monkeypatch.setattr(imap_client, "fetch_raw_message", lambda c, *, mailbox, uid: (draft_bytes, {}))
-    monkeypatch.setattr("mail_mcp.tools.drafts._drafts_mailbox_strict", lambda c, a, m, tool: "Drafts")
-    monkeypatch.setattr(imap_client, "connect", fake_connect)
-    monkeypatch.setattr("mail_mcp.tools.drafts._delete_old_draft_uid_safely", lambda *a, **k: None)
-    monkeypatch.setattr(
-        "mail_mcp.tools.drafts.resolve_auth",
-        lambda a: AuthCredential(kind="password", username=a.email, secret="x"),
-    )
-
-    def fake_send(account, creds, msg, *, bcc=None):
-        captured["mid"] = msg["Message-ID"]
-        return msg["Message-ID"]
-
-    monkeypatch.setattr(smtp_client, "send", fake_send)
-
-    out = send_draft(cfg, SendDraftInput(account="t", uid=1, confirm=True))
-    # Did not crash, and a real Message-ID was injected.
-    assert captured["mid"] and captured["mid"].startswith("<") and "@example.com>" in captured["mid"]
-    assert out["message_id"] == captured["mid"]
 
 
 def test_attach_files_enforces_total_cap_at_read_time(monkeypatch, tmp_path):

@@ -210,7 +210,7 @@ def test_reply_without_html_unchanged():
     assert msg.get_content_type() == "text/plain"
 
 
-# ---------- tool plumbing: save_draft / send_email / reply_draft ----------
+# ---------- tool plumbing: save_draft / reply_draft ----------
 
 @contextmanager
 def _fake_connect(account, creds):
@@ -294,37 +294,6 @@ def test_reply_draft_passes_body_html(monkeypatch):
     ))
     rebuilt = _parse(captured["bytes"])
     assert rebuilt.get_content_type() == "multipart/alternative"
-
-
-def test_send_email_body_html(monkeypatch):
-    from mail_mcp.tools import send as send_mod
-    from mail_mcp.tools.schemas import SendEmailInput
-
-    monkeypatch.setenv("MAIL_MCP_WRITE_ENABLED", "true")
-    monkeypatch.setenv("MAIL_MCP_SEND_ENABLED", "true")
-    send_mod._reset_for_tests()
-    captured: dict = {}
-
-    def fake_send(account, creds, msg, *, bcc=None):
-        captured["msg"] = msg
-        return msg["Message-ID"]
-
-    monkeypatch.setattr(smtp_client, "send", fake_send)
-    monkeypatch.setattr(
-        "mail_mcp.tools.send.resolve_auth",
-        lambda a: AuthCredential(kind="password", username=a.email, secret="x"),
-    )
-    out = send_mod.send_email(_cfg(), SendEmailInput(
-        account="t", to=["x@example.com"], subject="s",
-        body=PLAIN, body_html=HTML, confirm=True,
-    ))
-    assert captured["msg"].get_content_type() == "multipart/alternative"
-    assert "html_warning" not in out
-
-    out2 = send_mod.send_email(_cfg(), SendEmailInput(
-        account="t", to=["x@example.com"], subject="s", body=HTML, confirm=True,
-    ))
-    assert "body_html" in out2["html_warning"]
 
 
 # ---------- update_draft: preservation of the alternative pair ----------

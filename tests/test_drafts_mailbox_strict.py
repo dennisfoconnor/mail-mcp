@@ -1,4 +1,6 @@
-"""``update_draft`` / ``send_draft`` must refuse non-drafts mailboxes.
+"""``update_draft`` must refuse non-drafts mailboxes.
+
+(Upstream applies the same check to ``send_draft``, which this fork removed.)
 
 Codex adversarial review (high) flagged that the ``mailbox`` parameter
 on these tools was caller-controlled and reached an unconditional
@@ -146,41 +148,3 @@ def test_update_draft_resolves_when_mailbox_omitted():
     )
     assert capture["fetched"] == ("Borradores", 1)
     assert capture["deleted"][0] == "Borradores"
-
-
-def test_send_draft_refuses_explicit_non_drafts_mailbox(monkeypatch):
-    """Same gate applies to ``send_draft`` — same primitive."""
-    monkeypatch.setenv("MAIL_MCP_WRITE_ENABLED", "true")
-    monkeypatch.setenv("MAIL_MCP_SEND_ENABLED", "true")
-    from mail_mcp.tools.drafts import send_draft
-    from mail_mcp.tools.schemas import SendDraftInput
-
-    cfg = Config(path=Path("/tmp/x"), model=ConfigModel(accounts=[_account()]))
-    capture: dict = {}
-
-    @contextmanager
-    def fake_connect(account, creds):
-        client = MagicMock()
-        client.list_folders.return_value = _localised_folders()
-        capture["client"] = client
-        yield client
-
-    def fake_fetch_raw(c, *, mailbox, uid):
-        capture["fetched"] = (mailbox, uid)
-        return b"From: x@example.com\r\nSubject: y\r\n\r\n", {}
-
-    with patch.object(imap_client, "connect", fake_connect), \
-         patch.object(imap_client, "fetch_raw_message", fake_fetch_raw), \
-         patch("mail_mcp.tools.drafts.resolve_auth",
-               lambda a: AuthCredential(kind="password", username=a.email, secret="x")):
-        with pytest.raises(ValidationError) as ei:
-            send_draft(
-                cfg,
-                SendDraftInput(
-                    account="t", mailbox="INBOX", uid=42, confirm=True,
-                ),
-            )
-    assert "send_draft" in str(ei.value)
-    assert "INBOX" in str(ei.value)
-    # No fetch happened — the gate is pre-flight.
-    assert "fetched" not in capture

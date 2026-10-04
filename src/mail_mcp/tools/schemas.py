@@ -117,8 +117,7 @@ class SaveDraftInput(_AccountScoped):
             "NOT persisted — IMAP drafts with a Bcc header break threading on "
             "some providers, and the user re-enters BCC in their mail client "
             "at send time. The save_draft response echoes a 'bcc_dropped' note "
-            "when you pass it so this is visible. BCC IS honoured by send_email "
-            "(added as envelope recipients, never as a header)."
+            "when you pass it so this is visible."
         ),
     )
     include_signature: bool | None = Field(
@@ -141,13 +140,6 @@ class SaveDraftInput(_AccountScoped):
     attachments: list[AttachmentSpec] | None = Field(
         default=None,
         description="Files to attach from local disk. Each path must resolve under an allowed directory.",
-    )
-
-
-class SendEmailInput(SaveDraftInput):
-    confirm: bool = Field(
-        default=False,
-        description="Must be true to actually send. Acts as an explicit guard.",
     )
 
 
@@ -270,19 +262,6 @@ class UpdateDraftInput(_AccountScoped):
         default=True,
         description="Keep the original Message-ID so threaded replies still reference it.",
     )
-
-
-class SendDraftInput(_AccountScoped):
-    mailbox: str | None = Field(
-        default=None,
-        max_length=255,
-        description=(
-            "Mailbox holding the draft. Defaults to the account's drafts "
-            "mailbox auto-detected via SPECIAL-USE."
-        ),
-    )
-    uid: int = Field(ge=1)
-    confirm: bool = Field(default=False, description="Must be true to actually send.")
 
 
 class ReplyDraftInput(_AccountScoped):

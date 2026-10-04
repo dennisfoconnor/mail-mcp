@@ -9,7 +9,7 @@ unless ``--connect`` is passed:
 * which MCP clients (Claude Desktop, Claude Code, Codex CLI) reference
   mail-mcp, and
 * the state of the environment gates (``MAIL_MCP_WRITE_ENABLED``,
-  ``MAIL_MCP_SEND_ENABLED``, ``MAIL_MCP_ALLOW_PERMANENT_DELETE``,
+  ``MAIL_MCP_DESTRUCTIVE_ENABLED``, ``MAIL_MCP_ALLOW_PERMANENT_DELETE``,
   ``MAIL_MCP_LOG_LEVEL``).
 
 No passwords, tokens or message bodies are emitted. The report **does**
@@ -34,7 +34,7 @@ from .keyring_store import SERVICE_PREFIX
 
 _ENV_FLAGS = (
     "MAIL_MCP_WRITE_ENABLED",
-    "MAIL_MCP_SEND_ENABLED",
+    "MAIL_MCP_DESTRUCTIVE_ENABLED",
     "MAIL_MCP_ALLOW_PERMANENT_DELETE",
     "MAIL_MCP_ALLOW_INSECURE_TLS",
     "MAIL_MCP_LOG_LEVEL",
@@ -54,7 +54,7 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--connect",
         action="store_true",
-        help="Also attempt to authenticate against each account's IMAP/SMTP servers.",
+        help="Also attempt to authenticate against each account's IMAP server.",
     )
     args = parser.parse_args(argv)
 
@@ -88,7 +88,7 @@ def run(argv: list[str] | None = None) -> int:
         print(f"     signature    : {_signature_status(cfg, acct)}")
         print(f"     keyring      : {status}")
         if args.connect:
-            print(f"     imap+smtp    : {_live_check(acct)}")
+            print(f"     imap         : {_live_check(acct)}")
 
     _section("environment gates")
     for name in _ENV_FLAGS:
@@ -151,8 +151,8 @@ def _keyring_status(alias: str, email: str, auth: str) -> str:
 
 
 def _live_check(acct) -> str:
-    """Authenticate against IMAP+SMTP; does not transfer any messages."""
-    from . import imap_client, smtp_client
+    """Authenticate against IMAP; does not transfer any messages."""
+    from . import imap_client
     from .credentials import resolve_auth
 
     try:
@@ -164,11 +164,7 @@ def _live_check(acct) -> str:
             imap_client.list_folders(c, pattern="*")
     except Exception as exc:  # noqa: BLE001
         return f"IMAP error ({exc.__class__.__name__})"
-    try:
-        smtp_client.test_login(acct, creds, timeout=15)
-    except Exception as exc:  # noqa: BLE001
-        return f"IMAP ok, SMTP error ({exc.__class__.__name__})"
-    return "IMAP ok, SMTP ok"
+    return "IMAP ok"
 
 
 def _detect_mcp(name: str, path: Path) -> str:

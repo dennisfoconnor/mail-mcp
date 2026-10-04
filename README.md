@@ -4,7 +4,7 @@
 
 # mail-mcp
 
-**Privacy-first IMAP/SMTP MCP server for Claude Desktop, Claude Code, and Codex CLI.**
+**Privacy-first IMAP MCP server for Claude Desktop, Claude Code, and Codex CLI — a fork that cannot send.**
 
 Give your AI assistant real access to your mailbox — read, search, draft, organise — without sending a single credential to anyone's server.
 
@@ -15,6 +15,14 @@ Give your AI assistant real access to your mailbox — read, search, draft, orga
 
 </div>
 
+> [!IMPORTANT]
+> **This is a no-send fork of [`mario-hernandez/mail-mcp`](https://github.com/mario-hernandez/mail-mcp).**
+> It reads, searches, organises and drafts mail. It **cannot send**: the send
+> tools and the SMTP client are removed, not switched off, and no setting
+> brings them back. A draft lands in your Drafts folder and you send it from
+> your own mail client. See [`FORK.md`](FORK.md) for every difference from
+> upstream and how to merge upstream changes safely.
+
 ## Why this exists
 
 I wanted my Claude Code (and Codex) sessions to understand my inbox: find the last email from a client, pull the PDF they sent, draft a reply, archive the newsletter bulk. After auditing nine existing email MCP implementations I kept finding the same patterns — credentials written to disk in plain text, TLS verification bypassed, OAuth secrets shipped in the binary. `mail-mcp` is what I wish one of them had been. The audit notes live in [`SYNTHESIS.md`](SYNTHESIS.md) for anyone who wants to check the reasoning.
@@ -24,16 +32,17 @@ Since v0.3 the codebase has gone through repeated adversarial review rounds — 
 ## Highlights
 
 - 🔐 **Your password never touches a file.** It lives in the OS keyring — macOS Keychain, Linux Secret Service, Windows Credential Manager — via [`keyring`](https://pypi.org/project/keyring/). The config file only stores host/port/user/alias.
-- 🛡️ **TLS is mandatory.** IMAP uses implicit TLS (port 993). SMTP uses STARTTLS (587) or SMTPS (465). There is no knob to disable certificate verification.
+- 🛡️ **TLS is mandatory.** IMAP uses implicit TLS (port 993). There is no knob to disable certificate verification.
 - 🧱 **Prompt-injection hardened.** Email bodies are wrapped in an `<untrusted_email_content>` envelope with an explicit warning; closing-tag breakouts and zero-width injection characters are neutralised before the model sees them.
-- 🚪 **Destructive tools are gated by default.** Folder operations and bulk mutations are *not even registered* unless `MAIL_MCP_WRITE_ENABLED=true`. Send tools are visible always but refuse to transmit until both env vars are set; the LLM gets a typed `SEND_NOT_ENABLED` error with the exact recipe to enable instead of guessing the capability is missing.
+- 🚪 **Write tools are gated in two steps.** Copy, move and flag are *not even registered* unless `MAIL_MCP_WRITE_ENABLED=true`. Delete and folder changes additionally need `MAIL_MCP_DESTRUCTIVE_ENABLED=true`. A tool that is not registered cannot be listed or called by the model.
+- 📭 **No sending, by construction.** There is no send tool and no SMTP code. An agent that reads untrusted mail and can also transmit is exploitable by anyone who can put a message in your inbox; this fork removes the channel instead of gating it.
 - 🌍 **Localised mailboxes work out of the box.** `save_draft`, `list_drafts`, and `delete_emails` resolve the actual server folder at call time via RFC 6154 SPECIAL-USE: `Borradores`, `Brouillons`, `Entwürfe`, `Bozze`, `Papelera`, `Elementos eliminados`, `[Gmail]/Drafts`, … all handled. No more `[TRYCREATE] folder does not exist` on Outlook ES/FR/DE accounts.
-- 🎨 **HTML email done right.** Pass `body_html` to `save_draft` / `send_email` / `reply_draft` / `update_draft` and the message is built as `multipart/alternative` with `body` as the plain-text fallback — the structure spam filters and text-mode clients expect. Reply quotes land in **both** alternatives (HTML-escaped — From/Date are attacker-controlled). And if you paste HTML into `body` by mistake, the response carries an explicit `html_warning` instead of silently delivering raw markup.
-- ✒️ **Your signature, where Outlook puts it — when you say so.** Drop `firma.html` / `firma.txt` into `~/.config/mail-mcp/signatures/<alias>/` and drafts, replies, forwards and sends from that account can carry it — after the text, **before the reply quote**, HTML inserted verbatim, never twice. By default the agent must **ask you** for each message (`SIGNATURE_CHOICE_REQUIRED` until it passes `include_signature`); set `signature_mode: "auto"` to always sign. Paths are confined to that directory and size-capped; the LLM only gets an on/off switch.
+- 🎨 **HTML email done right.** Pass `body_html` to `save_draft` / `reply_draft` / `update_draft` and the message is built as `multipart/alternative` with `body` as the plain-text fallback — the structure spam filters and text-mode clients expect. Reply quotes land in **both** alternatives (HTML-escaped — From/Date are attacker-controlled). And if you paste HTML into `body` by mistake, the response carries an explicit `html_warning` instead of silently delivering raw markup.
+- ✒️ **Your signature, where Outlook puts it — when you say so.** Drop `firma.html` / `firma.txt` into `~/.config/mail-mcp/signatures/<alias>/` and drafts, replies and forwards from that account can carry it — after the text, **before the reply quote**, HTML inserted verbatim, never twice. By default the agent must **ask you** for each message (`SIGNATURE_CHOICE_REQUIRED` until it passes `include_signature`); set `signature_mode: "auto"` to always sign. Paths are confined to that directory and size-capped; the LLM only gets an on/off switch.
 - 🧾 **Forensic attachment mode for chain-of-custody.** `raw_passthrough=true` on an `AttachmentSpec` sends the file's bytes byte-for-byte. SHA-256 is preserved end-to-end through `save_draft` → IMAP → `download_attachment`. Useful for evidence preservation, eIDAS sealing, BEC incident response.
 - 🪶 **Small, auditable, six direct dependencies.** `mcp`, `imapclient`, `keyring`, `pydantic`, `certifi`, `defusedxml`. No web UI, no telemetry, no update checks, no relays, no phone-home.
 - 🧰 **Clean tool surface** — structured IMAP search (no concatenation), bounded outputs, path-traversal-safe attachment saves, RFC 4315 UID-scoped EXPUNGE that refuses to silently delete other clients' messages.
-- 🤖 **LLM-aware error semantics.** Errors return `{type, message, code, hint, retryable}`. Stable codes (`SEND_NOT_ENABLED`, `SEND_REQUIRES_CONFIRM`, `UIDPLUS_REQUIRED_FOR_SAFE_EXPUNGE`, `SIGNATURE_CHOICE_REQUIRED`, `RATE_LIMITED`, `AUTH_FAILED`, `TLS_ERROR`, `NOT_FOUND`, …) let agents branch programmatically without sniffing free-text.
+- 🤖 **LLM-aware error semantics.** Errors return `{type, message, code, hint, retryable}`. Stable codes (`UIDPLUS_REQUIRED_FOR_SAFE_EXPUNGE`, `SIGNATURE_CHOICE_REQUIRED`, `PERMISSION_DENIED`, `AUTH_FAILED`, `TLS_ERROR`, `NOT_FOUND`, …) let agents branch programmatically without sniffing free-text.
 
 ## Architecture
 
@@ -41,7 +50,7 @@ Since v0.3 the codebase has gone through repeated adversarial review rounds — 
 <img src="docs/images/architecture.png" alt="mail-mcp architecture" />
 </div>
 
-Three layers: your AI client talks MCP JSON-RPC over stdio, `mail-mcp` enforces the safety rules, the world only ever sees TLS-wrapped IMAP or SMTP to the host you configured. Passwords flow one way only: from the OS keyring into a short-lived IMAP/SMTP session.
+Three layers: your AI client talks MCP JSON-RPC over stdio, `mail-mcp` enforces the safety rules, the world only ever sees TLS-wrapped IMAP to the host you configured. Passwords flow one way only: from the OS keyring into a short-lived IMAP session. (The architecture image is upstream's and still shows SMTP; this fork has none.)
 
 ## Tools
 
@@ -66,19 +75,18 @@ Three layers: your AI client talks MCP JSON-RPC over stdio, `mail-mcp` enforces 
 | `copy_email` | ⚠️ | `MAIL_MCP_WRITE_ENABLED=true` | Copy without moving (file in two folders) |
 | `move_email` | ⚠️ | `MAIL_MCP_WRITE_ENABLED=true` | Move messages between mailboxes |
 | `mark_emails` | ⚠️ | `MAIL_MCP_WRITE_ENABLED=true` | Set/clear Seen and Flagged |
-| `delete_emails` | 🗑️ | `MAIL_MCP_WRITE_ENABLED=true` | Move to Trash by default; permanent delete double-gated |
-| `create_folder` | ⚠️ | `MAIL_MCP_WRITE_ENABLED=true` | Create an IMAP folder (idempotent) |
-| `rename_folder` | ⚠️ | `MAIL_MCP_WRITE_ENABLED=true` | Rename a folder, refuses collisions |
-| `delete_folder` | 🗑️ | `MAIL_MCP_WRITE_ENABLED=true` | Delete a folder; non-empty requires `confirm=true` |
-| `send_email` | 🚀 | `MAIL_MCP_WRITE_ENABLED=true` + `MAIL_MCP_SEND_ENABLED=true` + `confirm=true` | Send via SMTP (rate-limited per account). Visible always; refuses to transmit until both env vars are set. |
-| `send_draft` | 🚀 | same as `send_email` | Send an existing draft and remove it from Drafts. |
+| `delete_emails` | 🗑️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Move to Trash by default; permanent delete needs a third switch |
+| `create_folder` | ⚠️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Create an IMAP folder (idempotent) |
+| `rename_folder` | ⚠️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Rename a folder, refuses collisions |
+| `delete_folder` | 🗑️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Delete a folder; non-empty requires `confirm=true` |
 
-Two visibility modes intentionally:
+There is no `send_email` or `send_draft`. Three levels, each a superset of the one before:
 
-- **Destructive write tools** (`copy_email`, `move_email`, `mark_emails`, `delete_emails`, folder ops) — *not registered* without `MAIL_MCP_WRITE_ENABLED=true`. The model cannot enumerate them, let alone call them. Higher-blast-radius tools deserve the strongest gate.
-- **Send tools** (`send_email`, `send_draft`) — *always visible*, runtime-gated. The handler checks both env vars at call time and returns `error.code = "SEND_NOT_ENABLED"` with the exact env vars + config-file paths + restart instruction if the gate is off. The LLM can guide the user through enabling send in one turn instead of declaring the capability missing.
+- **Default** — read tools and the four draft tools.
+- **`MAIL_MCP_WRITE_ENABLED=true`** — adds `copy_email`, `move_email`, `mark_emails`.
+- **`MAIL_MCP_WRITE_ENABLED=true` + `MAIL_MCP_DESTRUCTIVE_ENABLED=true`** — adds `delete_emails` and the folder tools. The destructive switch on its own does nothing.
 
-The security boundary is the same in both cases (env vars decide what runs); only the *visibility* differs.
+Tools outside the active level are *not registered*: the model cannot enumerate them, let alone call them.
 
 ### Recipes the LLM will get right
 
@@ -96,13 +104,13 @@ Every tool takes `account="<alias>"`. Omit it to use the default from `~/.config
 **Search across non-English mail.**
 IMAP SEARCH is plain-ASCII per RFC 3501. Use `"nomina"`, not `"nómina"`. Folder names in your language (`Borradores`, `Papelera`, `Elementos eliminados`, `Brouillons`, `Entwürfe`, …) are detected at setup and resolved at every call; the LLM never has to know the localised string.
 
-**Send a formatted (HTML) email.**
-Put the HTML in `body_html` and a real plain-text version of the same content in `body` — the message ships as `multipart/alternative` (plain + html), which is what spam filters and text-mode clients expect. HTML pasted into `body` alone is delivered as raw source; the response flags it with `html_warning` instead of failing. Works on `save_draft`, `send_email`, `reply_draft` (quote appended to both parts) and `update_draft` (partial updates preserve both parts). Link images by URL — inline `cid:` embedding is not supported.
+**Draft a formatted (HTML) email.**
+Put the HTML in `body_html` and a real plain-text version of the same content in `body` — the message ships as `multipart/alternative` (plain + html), which is what spam filters and text-mode clients expect. HTML pasted into `body` alone is delivered as raw source; the response flags it with `html_warning` instead of failing. Works on `save_draft`, `reply_draft` (quote appended to both parts) and `update_draft` (partial updates preserve both parts). Link images by URL — inline `cid:` embedding is not supported.
 
 **Sign emails like Outlook does.**
 Put the account's signature in `~/.config/mail-mcp/signatures/<alias>/firma.html` and/or `firma.txt` (or point `signature_html_path` / `signature_text_path` in the config at files inside that directory). The write tools append it after the agent's text and before any reply quote: the text one after a `-- ` line in `body`, the HTML one verbatim in `body_html` — so pass `body_html` when the rich signature matters; a plain-text message is never turned into HTML. The signature always ends the agent's own text: before a quote generated by a mail client (Outlook, Gmail, Apple Mail, Thunderbird), at the very end otherwise — `>` quotes and bottom-posted replies are treated as the agent's text, and prose is never mistaken for a quote. A body that already contains the signature is left alone — one that only quotes your earlier signature is still signed — and `include_signature=false` skips it for one call. `get_account_info` tells the agent whether the account has one and its `mode`: with `"ask"` (the default) the agent must ask you and pass `include_signature=true|false` — omitting it returns `SIGNATURE_CHOICE_REQUIRED` and nothing is saved or sent — the decision is never guessed from the body, so editing a draft with `update_draft` asks too (the agent repeats your choice for that draft). `"auto"` signs every message unless told not to. With Microsoft 365 the signature lives in the mailbox and cannot be read over IMAP: save it once from the HTML of a message you sent from Outlook.
 
-**Send evidence with hash integrity (forensic).**
+**Attach evidence with hash integrity (forensic).**
 Pass `raw_passthrough: true` in an `AttachmentSpec`. The bytes go on the wire byte-for-byte, base64-encoded but never re-canonicalised. The recipient verifies `SHA-256(received) == SHA-256(source-on-disk)`. Trade-off: the file arrives as `application/octet-stream` regardless of extension, so the recipient saves and renames if they want their mail client to auto-render it as `.eml`.
 
 **Escape hatch when MIME is exotic.**
@@ -114,8 +122,8 @@ Pass `raw_passthrough: true` in an `AttachmentSpec`. The bytes go on the wire by
 ## Install
 
 ```bash
-# Until PyPI release — install straight from the repo:
-pip install "git+https://github.com/mario-hernandez/mail-mcp.git@main"
+# Install this fork straight from its repo (do NOT `pip install mail-mcp` — that is upstream):
+pip install "git+https://github.com/dennisfoconnor/mail-mcp.git@main"
 ```
 
 Requires Python ≥ 3.11. On Linux make sure `libsecret` is installed (most desktops have it); on Windows and macOS the keyring backend ships with the OS.
@@ -127,11 +135,11 @@ A full step-by-step integration guide (including Claude Desktop / Claude Code / 
 ### The quick path — interactive wizard
 
 ```bash
-pip install "mail-mcp[cli] @ git+https://github.com/mario-hernandez/mail-mcp.git@main"
+pip install "mail-mcp[cli] @ git+https://github.com/dennisfoconnor/mail-mcp.git@main"
 mail-mcp init
 ```
 
-`mail-mcp init` asks for your email address, auto-detects the IMAP and SMTP endpoints for your provider (Gmail, iCloud, Outlook.com, Fastmail, Yahoo, IONOS, GMX, Zoho, mailbox.org, Yandex, custom domains hosted on Google Workspace / Microsoft 365, and others), prompts for your password, tests the login live against both servers, and saves the account to the OS keyring. No flags to remember.
+`mail-mcp init` asks for your email address, auto-detects the IMAP and SMTP endpoints for your provider (Gmail, iCloud, Outlook.com, Fastmail, Yahoo, IONOS, GMX, Zoho, mailbox.org, Yandex, custom domains hosted on Google Workspace / Microsoft 365, and others), prompts for your password, tests the IMAP login live, and saves the account to the OS keyring. The SMTP endpoint is still recorded so the config file stays compatible with upstream, but this fork never connects to it. No flags to remember.
 
 ### The scripted path
 
@@ -148,7 +156,7 @@ Optional per-account fields in `~/.config/mail-mcp/config.json` (all default to 
 
 | Field | What it does |
 |---|---|
-| `smtp_username` | SMTP login identity when it differs from `email` — e.g. the Microsoft 365 UPN (see [`docs/OAUTH_MICROSOFT.md`](docs/OAUTH_MICROSOFT.md)). `add-account --smtp-username`. |
+| `smtp_username` | Inert in this fork (kept so upstream configs load). Upstream: SMTP login identity when it differs from `email` — e.g. the Microsoft 365 UPN (see [`docs/OAUTH_MICROSOFT.md`](docs/OAUTH_MICROSOFT.md)). `add-account --smtp-username`. |
 | `signature_mode` | `"ask"` (default): the agent must decide per message whether to add the signature (`include_signature`), else `SIGNATURE_CHOICE_REQUIRED`. `"auto"`: sign unless told not to. |
 | `signature_html_path` / `signature_text_path` | Signature files. Default: `signatures/<alias>/firma.html` / `firma.txt` next to the config, if present. `""` disables that part; relative paths are relative to the config directory. Must stay inside `~/.config/mail-mcp/signatures/`, ≤ 64 KiB, UTF-8. |
 
@@ -169,7 +177,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-To enable write tools, add an `env` block:
+To enable copy / move / flag, add an `env` block. Add `"MAIL_MCP_DESTRUCTIVE_ENABLED": "true"` next to it only if you also want delete and folder changes:
 
 ```json
 {
@@ -229,11 +237,12 @@ failures and their fixes.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MAIL_MCP_WRITE_ENABLED` | `false` | Register the destructive write tools (`copy_email`, `move_email`, `mark_emails`, `delete_emails`, folder CRUD). When unset they are *not registered* — the LLM cannot enumerate them. |
-| `MAIL_MCP_SEND_ENABLED` | `false` | Allow `send_email` / `send_draft` to actually transmit. The tools are visible regardless; without this flag they return `error.code = "SEND_NOT_ENABLED"` with the recipe to enable. Requires `MAIL_MCP_WRITE_ENABLED=true` as well. |
+| `MAIL_MCP_WRITE_ENABLED` | `false` | Register the organising tools (`copy_email`, `move_email`, `mark_emails`). When unset they are *not registered* — the LLM cannot enumerate them. |
+| `MAIL_MCP_DESTRUCTIVE_ENABLED` | `false` | Additionally register `delete_emails` and the folder tools (`create_folder`, `rename_folder`, `delete_folder`). Only takes effect together with `MAIL_MCP_WRITE_ENABLED=true`. |
 | `MAIL_MCP_ALLOW_PERMANENT_DELETE` | `false` | Allow `permanent=true` on `delete_emails`. Permanent delete uses UID-scoped `EXPUNGE` (RFC 4315 UIDPLUS) — never bare `EXPUNGE`. |
-| `MAIL_MCP_SEND_HOURLY_LIMIT` | `10` | Max `send_email` / `send_draft` calls per account per hour. Surfaces `RATE_LIMITED` with the existing window's reset hint. |
-| `MAIL_MCP_ATTACHMENT_DIR` | _unset_ | Additional directory accepted as an attachment source on top of the defaults (`~/Downloads`, `~/Documents/mail-mcp-outbox`, `$TMPDIR`). |
+| `MAIL_MCP_ATTACHMENT_DIR` | _unset_ | Additional directory accepted as a draft-attachment source on top of the single default, `~/Documents/mail-mcp-outbox`. Upstream also allowed `~/Downloads` and `$TMPDIR`; this fork does not. |
+
+`MAIL_MCP_SEND_ENABLED` and `MAIL_MCP_SEND_HOURLY_LIMIT` are upstream switches. This fork ignores them.
 | `MAIL_MCP_LOG_LEVEL` | `WARNING` | Server log level on stderr (`DEBUG` / `INFO` / `WARNING` / `ERROR`). Logs are sanitised — bearer tokens, `XOAUTH2`/`AUTH PLAIN`/`AUTH LOGIN` blobs, and `password=…` / `secret=…` / `token=…` key-value pairs are scrubbed before write. |
 | `MAIL_MCP_IMAP_CONNECT_TIMEOUT` | `15` | IMAP TCP + TLS handshake timeout, seconds. |
 | `MAIL_MCP_IMAP_READ_TIMEOUT` | `30` | IMAP socket read timeout, seconds. |
@@ -247,16 +256,16 @@ Once connected, talk to your AI assistant in plain language. The agent picks the
 - *"Draft a reply to the UID 4231 email thanking them and confirming the meeting on Thursday."*
 - *"Forward this phishing report to abuse@gmail.com — as the attached `.eml` so the headers stay intact."*
 - *"This Outlook email looks empty in your fetch. Can you read the raw RFC822 source?"* (the agent reaches for `get_email_raw`)
-- *"Send an evidence pack to CERT-Bund: these three `.eml` files plus a short cover. I need the SHA-256 of every attachment to match what's on disk."* (the agent uses `raw_passthrough: true`)
+- *"Draft an evidence pack to CERT-Bund: these three `.eml` files from my outbox folder plus a short cover. I need the SHA-256 of every attachment to match what's on disk."* (the agent uses `raw_passthrough: true`; you send the draft yourself)
 - *"Move all 'GitHub notifications' older than 30 days to my Archive folder."* (requires `MAIL_MCP_WRITE_ENABLED=true`)
-- *"Send these four invoices to expenses@revolut.com one by one."* (requires `MAIL_MCP_SEND_ENABLED=true`; if not set, the agent surfaces the exact env-var recipe instead of giving up)
 
 ## Security
 
 Extensive threat model in [SECURITY.md](SECURITY.md) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Short version:
 
 - No plaintext credential storage — everything in the OS keyring.
-- No outbound network beyond your IMAP/SMTP host. No telemetry, no update checks, no relays.
+- No outbound network beyond your IMAP host. No telemetry, no update checks, no relays.
+- No send capability at all — `tests/test_no_send.py` fails if a mail-sending library is ever imported.
 - Structured IMAP SEARCH (no string concatenation, no injection).
 - CRLF-injection defence in every header-bound string.
 - XPIA wrapper on every email body returned to the LLM, with closing-tag breakouts and zero-width invisibles neutralised.
@@ -273,11 +282,11 @@ To report a vulnerability: email `developer@supera.dev` with the subject prefix 
 ## Development
 
 ```bash
-git clone https://github.com/mario-hernandez/mail-mcp
+git clone https://github.com/dennisfoconnor/mail-mcp
 cd mail-mcp
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pytest         # 314 tests covering the safety boundaries
+pytest         # unit tests covering the safety boundaries
 ruff check src tests
 ```
 

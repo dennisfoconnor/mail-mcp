@@ -172,13 +172,15 @@ def test_raw_passthrough_preserves_arbitrary_binary_byte_identity():
         path.unlink(missing_ok=True)
 
 
-def test_resolve_many_propagates_raw_passthrough_from_dict_spec():
+def test_resolve_many_propagates_raw_passthrough_from_dict_spec(tmp_path, monkeypatch):
     """The flag must reach ResolvedAttachment from both dict and pydantic specs."""
     from mail_mcp.safety.attachments import resolve_many
 
+    # The fork only allows the outbox folder and MAIL_MCP_ATTACHMENT_DIR.
+    monkeypatch.setenv("MAIL_MCP_ATTACHMENT_DIR", str(tmp_path))
     fh = tempfile.NamedTemporaryFile(
         suffix=".bin",
-        dir=Path.home() / "Downloads",
+        dir=tmp_path,
         delete=False,
     )
     fh.write(b"x" * 100)

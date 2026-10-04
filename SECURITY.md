@@ -32,22 +32,22 @@ HTTPS is non-negotiable — HTTP URLs are rejected. Every call is capped at thre
 ## Controls
 
 - **Credentials stay in the OS keyring.** macOS Keychain, Linux Secret Service, Windows Credential Manager via [`keyring`](https://pypi.org/project/keyring/). The config file stores only host/port/user/alias.
-- **TLS is mandatory.** IMAP uses implicit TLS (port 993 by default); SMTP uses STARTTLS (587) or implicit TLS (465). Certificate verification cannot be silently disabled.
+- **TLS is mandatory.** IMAP uses implicit TLS (port 993 by default). Certificate verification cannot be silently disabled.
 - **IMAP searches use structured criteria.** User input never gets concatenated into a SEARCH string — the `imapclient` criteria list is typed and escaped.
 - **Email headers are built with `email.message.EmailMessage`.** Subject/To/From/Cc are additionally validated against `\r\n` and control characters before construction, so an LLM cannot inject a `Bcc:` header by stuffing `\r\n` into a user-visible field.
 - **Destructive tools are gated.**
   - `save_draft` is the preferred write path — the human reviews the draft in their mail client before sending.
-  - Mutating tools (`copy_email`, `move_email`, `mark_emails`, `delete_emails`, folder CRUD) require `MAIL_MCP_WRITE_ENABLED=true`; when unset they are *not registered*, so the LLM cannot even enumerate them.
-  - `send_email` and `send_draft` are *always* registered (so the LLM can guide the user through enabling them when needed) but the handlers refuse to transmit until both `MAIL_MCP_WRITE_ENABLED=true` AND `MAIL_MCP_SEND_ENABLED=true` are set. A call without the gate returns `error.code = "SEND_NOT_ENABLED"` with the env-var recipe and config-file paths. The security boundary is the gate; visibility is purely a UX affordance for the LLM. They additionally require `confirm=true` per call (distinct error code `SEND_REQUIRES_CONFIRM`).
+  - Organising tools (`copy_email`, `move_email`, `mark_emails`) require `MAIL_MCP_WRITE_ENABLED=true`. `delete_emails` and folder CRUD additionally require `MAIL_MCP_DESTRUCTIVE_ENABLED=true`. When unset they are *not registered*, so the LLM cannot even enumerate them.
+  - There is no `send_email` or `send_draft` in this fork, and no SMTP client. No environment variable brings them back; `tests/test_no_send.py` fails if a mail-sending library is imported anywhere in the package.
   - `delete_emails` defaults to moving to Trash; `permanent=true` requires `MAIL_MCP_ALLOW_PERMANENT_DELETE=true` and `confirm=true`.
 - **Prompt-injection guard.** Email bodies surfaced to the LLM are wrapped in a `<untrusted_email_content>` envelope with an explicit warning. Closing-tag breakouts and zero-width characters are neutralised before wrapping.
 - **Bounded outputs.** Body chars ≤ 64k (default 16k), attachments ≤ 25 MiB, batch UIDs ≤ 100, search results ≤ 500.
-- **Filesystem allowlist.** Attachment downloads are anchored under `~/Downloads/mail-mcp/<account>/` and resolved symlink-safely; `..` and absolute paths are rejected.
+- **Filesystem allowlist.** Attachment downloads are anchored under `~/Downloads/mail-mcp/<account>/` and resolved symlink-safely; `..` and absolute paths are rejected. Files attached to a draft must come from `~/Documents/mail-mcp-outbox` or `MAIL_MCP_ATTACHMENT_DIR` — not from `~/Downloads` or the temp directory as upstream allowed.
 - **Error sanitisation.** Exceptions are surfaced to the LLM as `{type, message}` with `XOAUTH2` / `AUTH PLAIN` / `AUTH LOGIN` blobs, IMAP `LOGIN "user" "pass"` traces, `password=…` / `secret=…` / `token=…` / `api-key=…` key-value pairs, and HTTP `Authorization: Bearer <token>` (plus the bare `Bearer <jwt>` form) redacted, alongside emails and hostnames.
 - **XML hardening.** Provider autoconfig responses are parsed through [`defusedxml`](https://pypi.org/project/defusedxml/), defending against billion-laughs and external-entity (XXE) attacks regardless of what the response-size cap allows through.
 - **OAuth refresh-token recovery.** When Microsoft returns `invalid_grant` (revoked refresh token, password rotation, conditional-access policy), the dead token is removed from the OS keyring and the in-memory access-token cache for that account is cleared, so the next call surfaces a clean "re-run `mail-mcp init`" instead of silently looping the same revoked token.
 - **Forensic mode for attachments.** `AttachmentSpec.raw_passthrough=true` forces `application/octet-stream` + base64 CTE for an attachment, guaranteeing `SHA-256(received) == SHA-256(source-on-disk)` end-to-end. Useful for chain-of-custody preservation.
-- **Zero outbound network beyond your IMAP/SMTP servers.** No telemetry, no update checks, no relays, no third-party APIs.
+- **Zero outbound network beyond your IMAP server.** No telemetry, no update checks, no relays, no third-party APIs.
 
 ## Threat model (summary)
 
@@ -55,10 +55,10 @@ In scope:
 
 - Cross-prompt injection attacks carried inside email bodies/subjects.
 - Credential theft from disk, logs, or process listings.
-- Man-in-the-middle attacks on IMAP/SMTP transport.
+- Man-in-the-middle attacks on IMAP transport.
 - CRLF / header injection originating from LLM tool arguments.
 - Path traversal attempts on attachment saves.
-- Exfiltration via `forward`/`send` to attacker-controlled destinations.
+- Exfiltration via `forward`/`send` to attacker-controlled destinations — closed structurally: the fork cannot transmit. What remains is a draft addressed to an attacker, which only leaves if the human sends it.
 
 Out of scope:
 

@@ -1,4 +1,4 @@
-"""mail-mcp — privacy-first IMAP/SMTP MCP server.
+"""mail-mcp — privacy-first IMAP MCP server (no-send fork).
 
 The public Python API is intentionally small; most users interact with the
 project via the ``mail-mcp`` CLI or by registering it as an MCP server in
@@ -10,7 +10,7 @@ from .autoconfig import Discovery, ServerSpec, discover
 from .config import AccountModel, Config, ConfigModel
 from .config import load as load_config
 
-__version__ = "0.7.0"
+__version__ = "0.7.0+nosend.1"
 
 __all__ = [
     "AccountModel",

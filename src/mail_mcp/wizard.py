@@ -15,7 +15,7 @@ import re
 import sys
 from typing import Any
 
-from . import autoconfig, imap_client, smtp_client
+from . import autoconfig, imap_client
 from .autoconfig import Discovery, DiscoveryError, ServerSpec
 from .config import AccountModel, ConfigModel, load, preserved_account_fields, save
 from .credentials import AuthCredential
@@ -200,7 +200,6 @@ def run() -> int:
     )
 
     imap_ok, imap_err, specials = _test_imap(console, account, password)
-    smtp_ok, smtp_err = _test_smtp(console, account, password)
 
     if specials:
         drafts = specials.get("\\Drafts")
@@ -212,11 +211,9 @@ def run() -> int:
             console.print(f"  [dim]detected Trash mailbox: {trash}[/dim]")
             account = account.model_copy(update={"trash_mailbox": trash})
 
-    if not (imap_ok and smtp_ok):
+    if not imap_ok:
         if imap_err:
             console.print(f"   [dim]IMAP error: {imap_err}[/dim]")
-        if smtp_err:
-            console.print(f"   [dim]SMTP error: {smtp_err}[/dim]")
         save_anyway = questionary.confirm(
             "One or more checks failed. Save the account anyway?",
             default=False,
@@ -384,22 +381,6 @@ def _test_imap(
     return True, None, specials
 
 
-def _test_smtp(console: Any, account: AccountModel, credential: Any) -> tuple[bool, str | None]:
-    """``credential`` is a password string or an :class:`AuthCredential`."""
-    with console.status("[cyan]Testing SMTP login…", spinner="dots"):
-        try:
-            smtp_client.test_login(account, credential)
-        except Exception as exc:  # noqa: BLE001
-            console.print(
-                f"  SMTP  : [red]✗[/red]  {account.smtp_host}:{account.smtp_port}"
-            )
-            return False, str(exc)
-    console.print(
-        f"  SMTP  : [green]✓[/green]  {account.smtp_host}:{account.smtp_port}"
-    )
-    return True, None
-
-
 # --- OAuth Microsoft 365 helpers -------------------------------------------
 
 
@@ -472,7 +453,7 @@ def _finish_oauth_microsoft(
                 "  • Redirect URI type: [bold]public client / native[/bold]\n"
                 "  • Redirect URI value: [bold]http://localhost[/bold]\n"
                 "  • API permissions (delegated): "
-                "IMAP.AccessAsUser.All, SMTP.Send, offline_access\n"
+                "IMAP.AccessAsUser.All, offline_access\n"
                 "  • 'Allow public client flows' = [bold]Yes[/bold]\n\n"
                 "See docs/OAUTH_MICROSOFT.md for step-by-step screenshots."
             ),
@@ -540,11 +521,10 @@ def _finish_oauth_microsoft(
         **(preserved or {}),
     )
 
-    # Verify the fresh access token actually works for IMAP and SMTP before
+    # Verify the fresh access token actually works for IMAP before
     # we write anything to disk or to the keyring.
     creds = AuthCredential(kind="oauth2", username=email, secret=bundle.access_token)
     imap_ok, imap_err, specials = _test_imap(console, account, creds)
-    smtp_ok, smtp_err = _test_smtp(console, account, creds)
     if specials:
         drafts = specials.get("\\Drafts")
         trash = specials.get("\\Trash")
@@ -555,11 +535,9 @@ def _finish_oauth_microsoft(
             console.print(f"  [dim]detected Trash mailbox: {trash}[/dim]")
             account = account.model_copy(update={"trash_mailbox": trash})
 
-    if not (imap_ok and smtp_ok):
+    if not imap_ok:
         if imap_err:
             console.print(f"   [dim]IMAP error: {imap_err}[/dim]")
-        if smtp_err:
-            console.print(f"   [dim]SMTP error: {smtp_err}[/dim]")
         save_anyway = questionary.confirm(
             "One or more checks failed. Save the account anyway?",
             default=False,

@@ -7,7 +7,34 @@ minor bump and are called out explicitly.
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Fork: no-send hardening (dennisfoconnor/mail-mcp)
+
+Differences from upstream `mario-hernandez/mail-mcp` at 0.7.0. See `FORK.md`.
+
+#### Removed
+- **Sending.** `send_email`, `send_draft`, the SMTP client (`send`,
+  `test_login`, SMTP authentication), the send rate limiter and the
+  `SEND_NOT_ENABLED` / `SEND_REQUIRES_CONFIRM` / `RATE_LIMITED` /
+  `PARTIAL_DELIVERY` error codes. `MAIL_MCP_SEND_ENABLED` and
+  `MAIL_MCP_SEND_HOURLY_LIMIT` are ignored.
+- The server instructions that told the model how to get sending enabled.
+- The `SMTP.Send` scope from the Microsoft OAuth request, the SMTP login test
+  in `init` / `doctor --connect`, and the `smtp` block of `get_account_info`.
+
+#### Changed
+- **Write gate split in two.** `MAIL_MCP_WRITE_ENABLED=true` now registers
+  only `copy_email`, `move_email` and `mark_emails`. `delete_emails` and the
+  folder tools additionally need `MAIL_MCP_DESTRUCTIVE_ENABLED=true`.
+  **Breaking** for configs that relied on the write switch alone for delete.
+- **Draft attachments** may only come from `~/Documents/mail-mcp-outbox` or
+  `MAIL_MCP_ATTACHMENT_DIR`. `~/Downloads` and `$TMPDIR` are no longer allowed.
+- Tool registration moved into `server.build_tool_table()` so the gating can
+  be tested without the MCP framework.
+
+#### Added
+- `tests/test_no_send.py`: fails if any module under `src/` imports a
+  mail-sending library, if a send tool is registered under any combination of
+  switches, or if the attachment allowlist widens.
 
 ## [0.7.0] — 2026-09-25
 

@@ -6,7 +6,7 @@ symlink escapes, size cap, UTF-8); insertion (text after a ``-- `` line, HTML
 verbatim before ``</body>``, derived flavours, idempotence, short and
 image-only signatures); and each tool — signature before the reply quote,
 forwards with ``comment_html``, ``update_draft`` only when the body is
-replaced, ``send_email`` failing closed before anything is sent.
+replaced. (Upstream's ``send_email`` signature tests were removed with sending.)
 
 All signature content here is synthetic.
 """
@@ -424,54 +424,6 @@ def test_update_draft_preserved_body_is_untouched(tmp_path, monkeypatch):
     msg = _parse(captured["bytes"])
     assert msg.get_body(("plain",)).get_content().count("Ada Lovelace") == 1
     assert msg.get_body(("html",)).get_content().count("sig-root") == 1
-
-
-def _send_setup(monkeypatch, captured):
-    from mail_mcp.tools import send as send_mod
-
-    monkeypatch.setenv("MAIL_MCP_WRITE_ENABLED", "true")
-    monkeypatch.setenv("MAIL_MCP_SEND_ENABLED", "true")
-    send_mod._reset_for_tests()
-
-    def fake_send(account, creds, msg, *, bcc=None):
-        captured["msg"] = msg
-        return msg["Message-ID"]
-
-    monkeypatch.setattr(smtp_client, "send", fake_send)
-    monkeypatch.setattr("mail_mcp.tools.send.resolve_auth", _creds)
-    return send_mod
-
-
-def test_send_email_is_signed(tmp_path, monkeypatch):
-    from mail_mcp.tools.schemas import SendEmailInput
-
-    _write_default(tmp_path)
-    captured: dict = {}
-    send_mod = _send_setup(monkeypatch, captured)
-    out = send_mod.send_email(_cfg(tmp_path), SendEmailInput(
-        account="t", to=["x@example.org"], subject="s", body=PLAIN, body_html=HTML, confirm=True,
-        include_signature=True,
-    ))
-    assert out["signature"] == "added"
-    assert SIG_HTML in captured["msg"].get_body(("html",)).get_content()
-
-
-def test_send_email_broken_signature_fails_before_sending(tmp_path, monkeypatch):
-    from mail_mcp.tools.schemas import SendEmailInput
-
-    _write_default(tmp_path, html="x" * (sigmod.MAX_SIGNATURE_BYTES + 1))
-    captured: dict = {}
-    send_mod = _send_setup(monkeypatch, captured)
-    with pytest.raises(ValidationError):
-        send_mod.send_email(_cfg(tmp_path), SendEmailInput(
-            account="t", to=["x@example.org"], subject="s", body=PLAIN, confirm=True,
-        ))
-    assert "msg" not in captured, "nothing may leave when the signature is broken"
-    out = send_mod.send_email(_cfg(tmp_path), SendEmailInput(
-        account="t", to=["x@example.org"], subject="s", body=PLAIN,
-        confirm=True, include_signature=False,
-    ))
-    assert out["signature"] == "disabled" and "msg" in captured
 
 
 def test_get_account_info_reports_signature_without_content(tmp_path):
@@ -1133,20 +1085,6 @@ def test_ask_mode_reply_and_forward_reject_before_connecting(tmp_path, monkeypat
         forward_draft(_cfg(tmp_path), ForwardDraftInput(account="t", uid=1, to=["y@example.org"]))
 
 
-def test_ask_mode_send_email_rejects_before_rate_limit_and_send(tmp_path, monkeypatch):
-    from mail_mcp.tools.schemas import SendEmailInput
-
-    _write_default(tmp_path)
-    captured: dict = {}
-    send_mod = _send_setup(monkeypatch, captured)
-    with pytest.raises(sigmod.SignatureChoiceRequired):
-        send_mod.send_email(_cfg(tmp_path), SendEmailInput(
-            account="t", to=["x@example.org"], subject="s", body=PLAIN, confirm=True,
-        ))
-    assert "msg" not in captured
-    assert not send_mod._send_history.get("t"), "an undecided signature must not burn a send slot"
-
-
 def test_signature_choice_required_is_classified_for_the_agent():
     from mail_mcp.server import _classify
 
@@ -1178,7 +1116,7 @@ OUTLOOK_DESKTOP_HTML = (
 
 def test_outlook_desktop_quote_with_owner_signature_still_asks(tmp_path, monkeypatch):
     from mail_mcp.tools.drafts import save_draft
-    from mail_mcp.tools.schemas import SaveDraftInput, SendEmailInput
+    from mail_mcp.tools.schemas import SaveDraftInput
 
     _write_default(tmp_path)
     captured: dict = {}
@@ -1188,13 +1126,6 @@ def test_outlook_desktop_quote_with_owner_signature_still_asks(tmp_path, monkeyp
             account="t", to=["c@example.org"], subject="RE: Offer", body=OUTLOOK_DESKTOP_TEXT,
         ))
     assert "bytes" not in captured
-    send_mod = _send_setup(monkeypatch, captured)
-    with pytest.raises(sigmod.SignatureChoiceRequired):
-        send_mod.send_email(_cfg(tmp_path), SendEmailInput(
-            account="t", to=["c@example.org"], subject="RE: Offer",
-            body=OUTLOOK_DESKTOP_TEXT, confirm=True,
-        ))
-    assert "msg" not in captured
 
 
 def test_update_draft_include_signature_without_body_is_rejected(tmp_path, monkeypatch):
@@ -1337,20 +1268,6 @@ def test_bare_header_block_is_still_not_a_quote_without_the_signature_after_it()
     )
     out = apply_signature(memo, None, Signature(None, SIG_TEXT))
     assert out.text.index("Gracias.") < out.text.index("-- \n")
-
-
-def test_explicit_false_on_a_body_carrying_the_signature_sends_with_a_note(tmp_path, monkeypatch):
-    from mail_mcp.tools.schemas import SendEmailInput
-
-    _write_default(tmp_path)
-    captured: dict = {}
-    send_mod = _send_setup(monkeypatch, captured)
-    out = send_mod.send_email(_cfg(tmp_path), SendEmailInput(
-        account="t", to=["x@example.org"], subject="s",
-        body=PLAIN + "\n\n-- \n" + SIG_TEXT, confirm=True, include_signature=False,
-    ))
-    assert out["signature"] == "still_present" and "signature_note" in out
-    assert captured["msg"].get_content().count("Ada Lovelace") == 1  # nothing added
 
 
 def test_signature_elsewhere_than_the_end_does_not_count_as_signed():

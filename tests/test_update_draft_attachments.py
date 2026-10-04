@@ -137,12 +137,14 @@ def test_update_draft_clears_attachments_when_explicit_empty_list():
     assert atts == []
 
 
-def test_update_draft_replaces_attachments_when_new_list_supplied():
+def test_update_draft_replaces_attachments_when_new_list_supplied(tmp_path, monkeypatch):
     """A non-empty list replaces the original attachments."""
+    # The fork only allows the outbox folder and MAIL_MCP_ATTACHMENT_DIR.
+    monkeypatch.setenv("MAIL_MCP_ATTACHMENT_DIR", str(tmp_path))
     fh = tempfile.NamedTemporaryFile(
         prefix="update_draft_test_",
         suffix=".pdf",
-        dir=Path.home() / "Downloads",
+        dir=tmp_path,
         delete=False,
     )
     fh.write(b"%PDF-1.4 fake content" * 50)

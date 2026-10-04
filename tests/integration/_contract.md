@@ -50,7 +50,7 @@ names, defined in `conftest.py`. This keeps the five test files coherent.
 ```python
 from mail_mcp import imap_client, smtp_client
 from mail_mcp.config import AccountModel, Config, ConfigModel
-from mail_mcp.tools import drafts, organize, read, send
+from mail_mcp.tools import drafts, organize, read
 from mail_mcp.tools.schemas import (
     CopyEmailInput, CreateFolderInput, DeleteEmailInput, DeleteFolderInput,
     DownloadAttachmentInput, ForwardDraftInput, GetEmailInput, GetQuotaInput,
@@ -79,5 +79,5 @@ integration suite is opt-in via `pytest -m integration` or the env flag
 - Agent C (read path) — `tests/integration/test_integration_read.py`.
 - Agent D (write path + folder ops) —
   `tests/integration/test_integration_write.py`.
-- Agent E (drafts + send) —
-  `tests/integration/test_integration_drafts_send.py`.
+- Agent E (drafts) —
+  `tests/integration/test_integration_drafts.py`.

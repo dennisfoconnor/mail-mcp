@@ -1,12 +1,12 @@
-"""Integration tests for the drafts + send path.
+"""Integration tests for the drafts path.
 
-Exercises the full MCP-tool surface that mutates the user's mailbox via
-drafts or the gated ``send_email`` / ``send_draft`` tools. All tests run
-against GreenMail (see ``tests/integration/conftest.py``) using a
-session-scoped container plus a per-test unique account.
+Exercises the MCP-tool surface that mutates the user's mailbox via drafts.
+All tests run against GreenMail (see ``tests/integration/conftest.py``)
+using a session-scoped container plus a per-test unique account.
 
-These tests own the behaviour documented in ``SECURITY.md`` around the
-send gating chain (env vars + ``confirm=true`` + per-account rate limit).
+This fork has no send tools, so the upstream send / rate-limit integration
+tests were removed with them. ``smtplib`` still appears below, but only as a
+test fixture that seeds a message into GreenMail.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from imapclient import IMAPClient
 
 from mail_mcp.config import AccountModel, Config
 from mail_mcp.safety.validation import ValidationError
-from mail_mcp.tools import drafts, organize, read, send
+from mail_mcp.tools import drafts, organize, read
 from mail_mcp.tools.schemas import (
     CreateFolderInput,
     ForwardDraftInput,
@@ -31,11 +31,8 @@ from mail_mcp.tools.schemas import (
     ReplyDraftInput,
     SaveDraftInput,
     SearchInput,
-    SendDraftInput,
-    SendEmailInput,
     UpdateDraftInput,
 )
-from mail_mcp.tools.send import RateLimited, SendDisabled, _reset_for_tests
 
 pytestmark = pytest.mark.integration
 
@@ -46,14 +43,9 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(autouse=True)
-def _write_and_send_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Flip both env gates on for the whole module.
-
-    Individual tests that need to observe the *disabled* state override
-    these with ``monkeypatch.delenv`` after the autouse fixture has run.
-    """
+def _write_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flip the write gate on for the whole module."""
     monkeypatch.setenv("MAIL_MCP_WRITE_ENABLED", "true")
-    monkeypatch.setenv("MAIL_MCP_SEND_ENABLED", "true")
 
 
 @pytest.fixture(autouse=True)
@@ -77,14 +69,6 @@ def _patch_tool_keyring_bindings(
     monkeypatch.setattr("mail_mcp.keyring_store.get_password", _fake)
 
 
-@pytest.fixture(autouse=True)
-def _reset_send_bucket() -> None:
-    """Clear the process-local rate-limit deque between tests."""
-    _reset_for_tests()
-    yield
-    _reset_for_tests()
-
-
 @pytest.fixture
 def ensure_drafts(cfg: Config) -> None:
     """Pre-create the Drafts mailbox so save_draft can APPEND.
@@ -100,56 +84,6 @@ def ensure_drafts(cfg: Config) -> None:
 def ensure_trash(cfg: Config) -> None:
     """Pre-create Trash so update_draft's APPEND-then-DELETE can run."""
     organize.create_folder(cfg, CreateFolderInput(mailbox="Trash"))
-
-
-@pytest.fixture
-def recipient_account(
-    greenmail: dict,
-    test_account: AccountModel,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[AccountModel, str]:
-    """A second GreenMail account + password, used for end-to-end send tests.
-
-    Kept local to this file so the shared ``conftest.py`` stays lean. The
-    keyring stub is expanded to know about *both* accounts so
-    ``smtp_client.send`` + ``imap_client.connect`` resolve credentials for
-    either account without colliding.
-    """
-    sender = test_account
-    alias = f"recipient-{uuid.uuid4().hex[:8]}"
-    email = f"test-{uuid.uuid4().hex[:8]}@localhost.local"
-    password = "greenmail"
-    acct = AccountModel(
-        alias=alias,
-        email=email,
-        imap_host=greenmail["imap_host"],
-        imap_port=greenmail["imap_port"],
-        smtp_host=greenmail["smtp_host"],
-        smtp_port=greenmail["smtp_port"],
-        imap_use_ssl=True,
-        smtp_starttls=False,
-        drafts_mailbox="Drafts",
-        trash_mailbox="Trash",
-    )
-    # Provision the recipient on the GreenMail server just like the primary
-    # test account; without this step IMAP LOGIN fails with "Invalid login".
-    from tests.integration.conftest import create_greenmail_user
-
-    create_greenmail_user(greenmail["admin_url"], email, password)
-
-    # Wrap the existing keyring stub so both the sender and the recipient
-    # resolve to "greenmail". monkeypatch re-entry *replaces* the prior stub
-    # rather than stacking, so the autouse ``_patch_tool_keyring_bindings``
-    # from this module is overridden cleanly by this more permissive version.
-    def _get_password(alias_in: str, email_in: str) -> str:
-        if alias_in == sender.alias or email_in == sender.email:
-            return "greenmail"
-        if alias_in == acct.alias or email_in == acct.email:
-            return password
-        raise RuntimeError(f"no password stub for {alias_in!r}/{email_in!r}")
-
-    monkeypatch.setattr("mail_mcp.keyring_store.get_password", _get_password)
-    return acct, password
 
 
 def _imap_ssl_context() -> ssl.SSLContext:
@@ -183,7 +117,7 @@ def test_save_draft_with_attachment_from_disk(
     cfg: Config, ensure_drafts: None, tmp_path: Path
 ) -> None:
     """File attachments sourced from the on-disk allowlist round-trip."""
-    outbox = Path.home() / "Downloads" / "mail-mcp-outbox"
+    outbox = Path.home() / "Documents" / "mail-mcp-outbox"
     outbox.mkdir(parents=True, exist_ok=True)
     attach_path = outbox / f"mailmcp-{uuid.uuid4().hex[:8]}.txt"
     attach_path.write_text("hello from disk\n", encoding="utf-8")
@@ -212,9 +146,7 @@ def test_save_draft_attachment_outside_allowlist_rejected(
 ) -> None:
     """Paths outside the configured allowlist raise ``ValidationError``."""
     # Pin the allowlist to a non-existent directory so whatever path the test
-    # supplies is guaranteed to fall outside. This sidesteps the platform-
-    # dependent $TMPDIR entry in the default allowlist (e.g. macOS puts
-    # pytest's tmp_path under /var/folders, which *is* allowed normally).
+    # supplies is guaranteed to fall outside.
     monkeypatch.setenv("MAIL_MCP_ATTACHMENT_DIR", "/nonexistent")
     monkeypatch.setattr(
         "mail_mcp.safety.attachments._allowed_roots",
@@ -416,129 +348,3 @@ def test_update_draft_without_message_id_preservation(
         ),
     )
     assert updated["message_id"] != first["message_id"]
-
-
-def test_send_draft_requires_env_and_confirm(
-    cfg: Config,
-    ensure_drafts: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``send_draft`` refuses without both env gates + confirm=true."""
-    first = drafts.save_draft(
-        cfg, SaveDraftInput(to=["x@example.com"], subject="gate", body="body")
-    )
-    uid = first["uid"]
-
-    # 1. Env disabled: SendDisabled even with confirm=True.
-    monkeypatch.delenv("MAIL_MCP_SEND_ENABLED", raising=False)
-    with pytest.raises(SendDisabled):
-        drafts.send_draft(
-            cfg, SendDraftInput(mailbox="Drafts", uid=uid, confirm=True)
-        )
-
-    # 2. Env re-enabled but confirm missing → SendDisabled.
-    monkeypatch.setenv("MAIL_MCP_SEND_ENABLED", "true")
-    with pytest.raises(SendDisabled):
-        drafts.send_draft(
-            cfg, SendDraftInput(mailbox="Drafts", uid=uid, confirm=False)
-        )
-
-
-def test_send_draft_happy_path(
-    cfg: Config,
-    ensure_drafts: None,
-    ensure_trash: None,
-    recipient_account: tuple[AccountModel, str],
-) -> None:
-    """A draft sent with confirm=true is SMTP-delivered and removed from Drafts."""
-    recipient, recipient_password = recipient_account
-    first = drafts.save_draft(
-        cfg,
-        SaveDraftInput(
-            to=[recipient.email], subject="send-happy", body="hi there"
-        ),
-    )
-    uid = first["uid"]
-
-    result = drafts.send_draft(
-        cfg, SendDraftInput(mailbox="Drafts", uid=uid, confirm=True)
-    )
-    assert result["status"] == "sent"
-
-    # Draft is gone from Drafts.
-    listing = read.list_drafts(cfg, ListDraftsInput())
-    assert uid not in {row["uid"] for row in listing["results"]}
-
-    # Message arrived on the recipient's INBOX. Log in as the recipient via
-    # raw IMAPClient — bypassing the tools layer keeps this assertion
-    # independent of whatever the SUT does with credentials.
-    with IMAPClient(
-        recipient.imap_host,
-        port=recipient.imap_port,
-        ssl=True,
-        ssl_context=_imap_ssl_context(),
-    ) as c:
-        c.login(recipient.email, recipient_password)
-        c.select_folder("INBOX", readonly=True)
-        matches = c.search(["SUBJECT", "send-happy"])
-        assert matches, "message never arrived on recipient INBOX"
-
-
-def test_send_email_rate_limit_enforced(
-    cfg: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Exceeding ``MAIL_MCP_SEND_HOURLY_LIMIT`` raises ``RateLimited``."""
-    monkeypatch.setenv("MAIL_MCP_SEND_HOURLY_LIMIT", "2")
-    _reset_for_tests()
-
-    def _call():
-        return send.send_email(
-            cfg,
-            SendEmailInput(
-                to=[f"ratelimit-{uuid.uuid4().hex[:6]}@localhost.local"],
-                subject="t",
-                body="b",
-                confirm=True,
-            ),
-        )
-
-    _call()
-    _call()
-    with pytest.raises(RateLimited):
-        _call()
-
-
-def test_send_email_respects_from_header(
-    cfg: Config,
-    recipient_account: tuple[AccountModel, str],
-    test_account: AccountModel,
-) -> None:
-    """Delivered mail carries From: == the configured test account."""
-    recipient, recipient_password = recipient_account
-    sender = test_account
-
-    subject = f"from-check-{uuid.uuid4().hex[:6]}"
-    send.send_email(
-        cfg,
-        SendEmailInput(
-            to=[recipient.email], subject=subject, body="hi", confirm=True
-        ),
-    )
-
-    with IMAPClient(
-        recipient.imap_host,
-        port=recipient.imap_port,
-        ssl=True,
-        ssl_context=_imap_ssl_context(),
-    ) as c:
-        c.login(recipient.email, recipient_password)
-        c.select_folder("INBOX", readonly=True)
-        matches = c.search(["SUBJECT", subject])
-        assert matches, "message never arrived"
-        raw = c.fetch(matches, ["RFC822"])[matches[0]][b"RFC822"]
-
-    msg = _email.message_from_bytes(raw, policy=_policy.default)
-    from_hdr = msg.get("From", "")
-    assert sender.email in from_hdr, (
-        f"expected sender {sender.email!r} in From header, got {from_hdr!r}"
-    )
