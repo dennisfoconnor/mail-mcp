@@ -771,7 +771,27 @@ def move_uids(
     if len(uids) > MAX_BATCH_UIDS:
         raise ValidationError(f"batch too large (max {MAX_BATCH_UIDS} uids)")
     client.select_folder(source, readonly=False)
-    client.move(uids, destination)
+    if _has_capability(client, b"MOVE"):
+        client.move(uids, destination)
+        return len(uids)
+    # No RFC 6851 MOVE (iCloud, for one, does not advertise it). RFC 6851
+    # itself spells out the equivalent: COPY, flag the originals \\Deleted,
+    # then UID EXPUNGE exactly those UIDs. The expunge has to be UID-scoped
+    # (UIDPLUS) — a bare EXPUNGE would also remove whatever another client
+    # had already flagged \\Deleted in this mailbox. Probe BEFORE copying so
+    # a server with neither capability fails with nothing mutated.
+    if not _has_uidplus(client):
+        raise UIDPlusRequired(
+            "server advertises neither MOVE nor UIDPLUS, so messages cannot "
+            "be moved without risking unrelated messages another client has "
+            "already flagged \\Deleted. No messages were mutated. copy_email "
+            "works without either capability."
+        )
+    # Order matters: nothing is flagged or expunged until the copy has
+    # succeeded, so a failure at any step leaves at least one copy.
+    client.copy(uids, destination)
+    client.add_flags(uids, [b"\\Deleted"], silent=True)
+    client.uid_expunge(uids)
     return len(uids)
 
 
@@ -854,13 +874,21 @@ class UIDPlusRequired(RuntimeError):
     code = "UIDPLUS_REQUIRED_FOR_SAFE_EXPUNGE"
 
 
-def _has_uidplus(client: IMAPClient) -> bool:
-    """True when the server advertises RFC 4315 UIDPLUS in its capabilities."""
+def _has_capability(client: IMAPClient, name: bytes) -> bool:
+    """True when the server advertises ``name`` in its capabilities."""
     try:
         caps = client.capabilities()
     except Exception:  # noqa: BLE001 — be conservative on capability probes
         return False
-    return b"UIDPLUS" in caps
+    try:
+        return name in caps
+    except TypeError:
+        return False
+
+
+def _has_uidplus(client: IMAPClient) -> bool:
+    """True when the server advertises RFC 4315 UIDPLUS in its capabilities."""
+    return _has_capability(client, b"UIDPLUS")
 
 
 def safe_uid_expunge(client: IMAPClient, *, uids: list[int]) -> None:

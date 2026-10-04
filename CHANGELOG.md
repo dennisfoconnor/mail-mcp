@@ -31,6 +31,15 @@ Differences from upstream `mario-hernandez/mail-mcp` at 0.7.0. See `FORK.md`.
 - Tool registration moved into `server.build_tool_table()` so the gating can
   be tested without the MCP framework.
 
+#### Fixed
+- **`move_email` and move-to-Trash now work on servers without the IMAP MOVE
+  extension (iCloud).** `move_uids` called `IMAPClient.move` unconditionally,
+  which raises `CapabilityError` there. Without MOVE it now does what RFC 6851
+  gives as the equivalent: COPY, flag the originals `\\Deleted`, then
+  `UID EXPUNGE` exactly those UIDs. Nothing is flagged or expunged unless the
+  copy succeeded, a bare `EXPUNGE` is never issued, and a server with neither
+  MOVE nor UIDPLUS is refused before anything is mutated.
+
 #### Added
 - `tests/test_no_send.py`: fails if any module under `src/` imports a
   mail-sending library, if a send tool is registered under any combination of
