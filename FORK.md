@@ -141,13 +141,21 @@ edits. After any merge:
    to and add it to the expected sets in `tests/test_server_gating.py`.
 4. `src/mail_mcp/tools/send.py` must stay deleted.
 
-## How this was verified
+## How this is verified
 
-The unit suite passes with these changes (515 passed, 3 skipped). It was run
-with small local stand-ins for `imapclient` and `keyring` and against a newer
-`mcp` SDK than the project pins, because the packages could not be installed
-where the work was done. The three skips are two that upstream already skips
-and the one test that needs the pinned `mcp` SDK. The GreenMail integration
-tests under `tests/integration/` were edited to match but not run. Run the
-full suite once in a normal environment (`pip install -e ".[dev]" && pytest`)
-before relying on the fork.
+`.github/workflows/tests.yml` runs on every pull request and every push to
+`main`:
+
+- **Lint**: `ruff check src tests`.
+- **Unit tests** on Python 3.11, 3.12 and 3.13 (Ubuntu) and 3.12 (macOS),
+  installed with the pinned dependencies. The three guard-test files are part
+  of this suite.
+- **Integration tests**: the GreenMail suite under `tests/integration/`, run
+  against a throwaway mail server in Docker.
+
+Failing test names and the last lines of each failure are shown on the pull
+request itself (`.github/scripts/report_failures.py`).
+
+Not covered by CI: a real iCloud account. GreenMail is a test server, and
+whether it advertises the same IMAP extensions as iCloud decides which branch
+of the move code it exercises.
