@@ -328,7 +328,8 @@ def test_get_account_info(cfg, patched_keyring):
     assert result["imap"]["host"] == "localhost"
     assert result["imap"]["port"] > 0
     assert result["imap"]["ssl"] is True
-    assert result["smtp"]["port"] > 0
+    # The no-send fork does not report SMTP settings to the model.
+    assert "smtp" not in result
 
 
 def test_get_quota_returns_nulls_or_values(cfg, patched_keyring):

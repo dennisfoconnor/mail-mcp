@@ -288,9 +288,16 @@ def test_forward_draft_attaches_rfc822(
     assert result["uid"] in {row["uid"] for row in listing["results"]}
 
     got = read.get_email(cfg, GetEmailInput(mailbox="Drafts", uid=result["uid"]))
-    # The original email body must not leak into the forward's body verbatim:
-    # build_forward_message attaches the original as a message/rfc822 part.
-    assert marker not in got["body"]
+    # The original must not be inlined into the forward's own text:
+    # build_forward_message attaches it as a message/rfc822 part. Since
+    # v0.3.x ``get_email`` unfolds such a part for reading and shows it under
+    # a "--- Forwarded message ---" divider, so the marker is expected there
+    # and only there. (This assertion predated that feature and required the
+    # marker to be absent altogether.)
+    own_text, divider, forwarded = got["body"].partition("--- Forwarded message ---")
+    assert divider, "the forwarded original should be shown under a divider"
+    assert marker not in own_text
+    assert marker in forwarded
 
     # Re-parse the raw message to confirm an rfc822 part exists. get_email's
     # ``attachments`` list filters by Content-Disposition, which EmailMessage

@@ -49,6 +49,7 @@ def main(report: str) -> int:
     passed = len(cases) - len(failures) - skipped
     headline = f"{passed} passed, {len(failures)} failed, {skipped} skipped"
     print(headline)
+    print(f"::notice title=Test results::{_escape(headline)}")
 
     for name, kind, detail in failures[:MAX_ANNOTATIONS]:
         tail = "\n".join(detail.splitlines()[-MAX_LINES:])
