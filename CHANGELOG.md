@@ -31,6 +31,22 @@ Differences from upstream `mario-hernandez/mail-mcp` at 0.7.0. See `FORK.md`.
 - Tool registration moved into `server.build_tool_table()` so the gating can
   be tested without the MCP framework.
 
+#### Changed (destructive tools can no longer destroy mail)
+- **No permanent delete.** `delete_emails` only moves messages to the trash.
+  The `permanent` and `confirm` arguments are removed (passing them is a
+  validation error) and `MAIL_MCP_ALLOW_PERMANENT_DELETE` is ignored.
+- **The trash cannot be emptied.** `delete_emails` refuses messages that are
+  already in the trash, with the new error code `PROTECTED_FOLDER`.
+- **`delete_folder` only deletes empty folders.** A folder with any message
+  or any subfolder is refused with `FOLDER_NOT_EMPTY`. The `confirm` override
+  is removed. A missing message count now refuses instead of counting as zero.
+- **System folders cannot be deleted or renamed**: the inbox, and trash,
+  drafts, sent, junk and archive whether flagged by the server or matched by
+  name.
+- `move_email` rejects a move onto the same mailbox.
+- `tests/test_destructive_guards.py` pins these, and that no code path other
+  than `update_draft` requests a permanent delete or issues a bare `EXPUNGE`.
+
 #### Fixed
 - **`move_email` and move-to-Trash now work on servers without the IMAP MOVE
   extension (iCloud).** `move_uids` called `IMAPClient.move` unconditionally,

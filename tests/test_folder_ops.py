@@ -1,8 +1,7 @@
 """Unit tests for folder management helpers.
 
-The IMAP client is mocked; we care about the decision logic (empty-folder
-refusal, idempotency, validation wiring), not about the wire behaviour of
-any particular server.
+The IMAP client is mocked; we care about the decision logic (idempotency,
+validation wiring), not about the wire behaviour of any particular server.
 """
 
 from unittest.mock import MagicMock
@@ -60,28 +59,5 @@ def test_rename_folder_refuses_when_source_missing():
         imap_client.rename_folder(c, old_name="Ghost", new_name="Whatever")
 
 
-def test_delete_folder_refuses_non_empty_without_confirm():
-    c = _fake_client(exists=True, message_count=42)
-    with pytest.raises(RuntimeError, match="not empty"):
-        imap_client.delete_folder(c, mailbox="Archivo", allow_non_empty=False)
-    c.delete_folder.assert_not_called()
-
-
-def test_delete_folder_allows_non_empty_with_confirm():
-    c = _fake_client(exists=True, message_count=42)
-    removed = imap_client.delete_folder(c, mailbox="Archivo", allow_non_empty=True)
-    assert removed == 42
-    c.delete_folder.assert_called_once_with("Archivo")
-
-
-def test_delete_folder_empty_without_confirm():
-    c = _fake_client(exists=True, message_count=0)
-    removed = imap_client.delete_folder(c, mailbox="Archivo", allow_non_empty=False)
-    assert removed == 0
-    c.delete_folder.assert_called_once_with("Archivo")
-
-
-def test_delete_folder_refuses_missing():
-    c = _fake_client(exists=False)
-    with pytest.raises(RuntimeError, match="does not exist"):
-        imap_client.delete_folder(c, mailbox="Ghost", allow_non_empty=False)
+# delete_folder itself is covered in tests/test_destructive_guards.py: the
+# fork only deletes empty, childless, non-system folders and has no override.

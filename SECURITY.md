@@ -39,7 +39,8 @@ HTTPS is non-negotiable — HTTP URLs are rejected. Every call is capped at thre
   - `save_draft` is the preferred write path — the human reviews the draft in their mail client before sending.
   - Organising tools (`copy_email`, `move_email`, `mark_emails`) require `MAIL_MCP_WRITE_ENABLED=true`. `delete_emails` and folder CRUD additionally require `MAIL_MCP_DESTRUCTIVE_ENABLED=true`. When unset they are *not registered*, so the LLM cannot even enumerate them.
   - There is no `send_email` or `send_draft` in this fork, and no SMTP client. No environment variable brings them back; `tests/test_no_send.py` fails if a mail-sending library is imported anywhere in the package.
-  - `delete_emails` defaults to moving to Trash; `permanent=true` requires `MAIL_MCP_ALLOW_PERMANENT_DELETE=true` and `confirm=true`.
+  - `delete_emails` only moves messages to the trash. There is no permanent delete, and messages already in the trash cannot be deleted, so the server cannot empty the trash.
+  - `delete_folder` only deletes a folder with no messages and no subfolders. System folders (inbox, trash, drafts, sent, junk, archive) cannot be deleted or renamed. None of these limits has an override; `tests/test_destructive_guards.py` pins them.
 - **Prompt-injection guard.** Email bodies surfaced to the LLM are wrapped in a `<untrusted_email_content>` envelope with an explicit warning. Closing-tag breakouts and zero-width characters are neutralised before wrapping.
 - **Bounded outputs.** Body chars ≤ 64k (default 16k), attachments ≤ 25 MiB, batch UIDs ≤ 100, search results ≤ 500.
 - **Filesystem allowlist.** Attachment downloads are anchored under `~/Downloads/mail-mcp/<account>/` and resolved symlink-safely; `..` and absolute paths are rejected. Files attached to a draft must come from `~/Documents/mail-mcp-outbox` or `MAIL_MCP_ATTACHMENT_DIR` — not from `~/Downloads` or the temp directory as upstream allowed.

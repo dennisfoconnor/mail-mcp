@@ -9,7 +9,7 @@ transmit is exploitable by anyone who can put a message in the inbox.
 Upstream handles that by gating its send tools behind environment switches.
 This fork removes the capability, so there is nothing to switch on.
 
-## The four changes
+## The changes
 
 ### 1. Sending is removed
 
@@ -41,8 +41,7 @@ round.
 | `MAIL_MCP_WRITE_ENABLED=true` and `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | `delete_emails`, `create_folder`, `rename_folder`, `delete_folder` |
 
 Upstream registers all seven with the write switch alone.
-`MAIL_MCP_DESTRUCTIVE_ENABLED` on its own does nothing. Permanent delete still
-needs `MAIL_MCP_ALLOW_PERMANENT_DELETE=true` and `confirm=true` on top.
+`MAIL_MCP_DESTRUCTIVE_ENABLED` on its own does nothing.
 
 ### 3. Draft attachments come from one folder
 
@@ -73,6 +72,37 @@ not a file from disk.
 of switches, so adding a tool or moving one to a weaker gate has to be a
 deliberate edit to that file.
 
+### 5. The destructive switch cannot destroy mail
+
+The destructive tools are limited so the switch is safe to leave on. None of
+these limits has an override argument or environment variable.
+
+| Upstream | This fork |
+|---|---|
+| `delete_emails(permanent=true)` expunges, behind `MAIL_MCP_ALLOW_PERMANENT_DELETE` and `confirm=true` | No permanent delete. `delete_emails` only moves to the trash; `permanent` is a validation error and the switch is ignored |
+| Messages in the trash can be deleted like any others | Refused: that would be emptying the trash |
+| `delete_folder(confirm=true)` deletes a folder with messages in it | Only a folder with no messages and no subfolders is deleted; `confirm` is a validation error |
+| A missing message count is treated as zero | The delete is refused |
+| Any folder can be deleted or renamed | The inbox, trash, drafts, sent, junk and archive folders cannot, whether or not the server flags them |
+
+A trashed message can be moved back with `move_email`. Your mail provider may
+still erase old trash on its own schedule; that is a mail-account setting.
+
+`update_draft` still removes the superseded copy of a draft it has just
+re-saved. That is the one remaining permanent removal, and it can only
+happen inside the Drafts mailbox.
+
+`tests/test_destructive_guards.py` pins all of this, including that no other
+code path requests a permanent delete and that a bare `EXPUNGE` is never
+issued.
+
+### 6. Moving mail works without IMAP MOVE
+
+iCloud does not advertise the MOVE extension, so upstream's `move_email` and
+move-to-trash fail there. This fork falls back to COPY, flag `\Deleted`,
+`UID EXPUNGE` of exactly those UIDs, in that order, and removes nothing until
+the copy has succeeded.
+
 ## What is not changed
 
 - Drafts are on by default, as upstream. There is no pure read-only mode.
@@ -99,11 +129,13 @@ It ends with `send=unavailable`.
 Upstream is active, and its changes will often touch the files this fork
 edits. After any merge:
 
-1. Run `pytest`. `tests/test_no_send.py` and `tests/test_server_gating.py`
-   must pass. If they fail, the merge brought sending or a new tool back.
+1. Run `pytest`. `tests/test_no_send.py`, `tests/test_server_gating.py` and
+   `tests/test_destructive_guards.py` must pass. If they fail, the merge
+   brought back sending, a new tool, or a way to destroy mail.
 2. Do not resolve a conflict by taking upstream's side in
    `src/mail_mcp/server.py`, `src/mail_mcp/smtp_client.py`,
-   `src/mail_mcp/tools/drafts.py`, `src/mail_mcp/tools/schemas.py` or
+   `src/mail_mcp/tools/drafts.py`, `src/mail_mcp/tools/organize.py`,
+   `src/mail_mcp/tools/schemas.py`, `src/mail_mcp/imap_client.py` or
    `src/mail_mcp/safety/attachments.py` without reading it.
 3. If upstream adds a new tool, decide which of the three levels it belongs
    to and add it to the expected sets in `tests/test_server_gating.py`.
@@ -111,7 +143,7 @@ edits. After any merge:
 
 ## How this was verified
 
-The unit suite passes with these changes (468 passed, 3 skipped). It was run
+The unit suite passes with these changes (515 passed, 3 skipped). It was run
 with small local stand-ins for `imapclient` and `keyring` and against a newer
 `mcp` SDK than the project pins, because the packages could not be installed
 where the work was done. The three skips are two that upstream already skips

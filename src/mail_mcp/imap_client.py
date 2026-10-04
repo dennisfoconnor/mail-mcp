@@ -757,6 +757,66 @@ def fetch_headers(
     return out
 
 
+class ProtectedFolder(RuntimeError):
+    """Raised when a folder operation targets a folder this fork never alters.
+
+    The inbox and the system folders (trash, drafts, sent, junk, archive)
+    cannot be deleted or renamed, and messages already in the trash cannot be
+    deleted again — that would be emptying it. There is no override.
+    """
+
+    code = "PROTECTED_FOLDER"
+
+
+class FolderNotEmpty(RuntimeError):
+    """Raised when ``delete_folder`` targets a folder that still holds something.
+
+    Deleting a folder takes its messages with it, irreversibly on most
+    providers, so this fork only ever deletes folders that contain no
+    messages and no subfolders. There is no override.
+    """
+
+    code = "FOLDER_NOT_EMPTY"
+
+
+# Names treated as system folders even when the server does not flag them.
+# iCloud, for one, advertises SPECIAL-USE only for Trash and Sent; its
+# Drafts, Junk and Archive carry no flag at all. Compared case-insensitively.
+_SYSTEM_FOLDER_NAMES = frozenset(
+    name.casefold()
+    for name in (
+        "INBOX",
+        "Sent", "Sent Messages", "Sent Items", "Sent Mail",
+        "Junk", "Junk E-mail", "Spam",
+        "Archive", "All Mail",
+        "Deleted Messages",
+        "Notes",
+        *_LOCALISED_DRAFTS_FALLBACKS,
+        *_LOCALISED_TRASH_FALLBACKS,
+    )
+)
+
+
+def _protected_reason(
+    name: str, info: FolderInfo | None, extra_protected: tuple[str, ...]
+) -> str | None:
+    """Why ``name`` must not be deleted or renamed, or ``None`` if it may be."""
+    folded = name.casefold()
+    if folded == "inbox":
+        return "it is the inbox"
+    if info is not None and info.special_use:
+        return f"the server marks it as a system folder ({info.special_use})"
+    if folded in _SYSTEM_FOLDER_NAMES:
+        return "it is a system folder"
+    if folded in {extra.casefold() for extra in extra_protected if extra}:
+        return "it is this account's drafts or trash mailbox"
+    return None
+
+
+def _same_mailbox(a: str, b: str) -> bool:
+    return a.casefold() == b.casefold()
+
+
 def move_uids(
     client: IMAPClient,
     *,
@@ -768,6 +828,8 @@ def move_uids(
     validate_mailbox_name(destination)
     if not uids:
         return 0
+    if _same_mailbox(source, destination):
+        raise ValidationError("source and destination are the same mailbox")
     if len(uids) > MAX_BATCH_UIDS:
         raise ValidationError(f"batch too large (max {MAX_BATCH_UIDS} uids)")
     client.select_folder(source, readonly=False)
@@ -809,9 +871,22 @@ def create_folder(client: IMAPClient, *, mailbox: str) -> bool:
     return True
 
 
-def rename_folder(client: IMAPClient, *, old_name: str, new_name: str) -> None:
+def rename_folder(
+    client: IMAPClient,
+    *,
+    old_name: str,
+    new_name: str,
+    protected: tuple[str, ...] = (),
+) -> None:
+    """Rename a folder. System folders (inbox, trash, drafts, …) are refused."""
     validate_mailbox_name(old_name, field="old_name")
     validate_mailbox_name(new_name, field="new_name")
+    folders = {f.name: f for f in list_folders(client)}
+    reason = _protected_reason(old_name, folders.get(old_name), protected)
+    if reason:
+        raise ProtectedFolder(
+            f"folder {old_name!r} cannot be renamed: {reason}. There is no override."
+        )
     if not client.folder_exists(old_name):
         raise RuntimeError(f"folder {old_name!r} does not exist")
     if client.folder_exists(new_name):
@@ -819,24 +894,63 @@ def rename_folder(client: IMAPClient, *, old_name: str, new_name: str) -> None:
     client.rename_folder(old_name, new_name)
 
 
-def delete_folder(client: IMAPClient, *, mailbox: str, allow_non_empty: bool) -> int:
-    """Delete an IMAP folder. Refuses non-empty folders unless explicitly allowed.
+def delete_folder(
+    client: IMAPClient,
+    *,
+    mailbox: str,
+    protected: tuple[str, ...] = (),
+) -> None:
+    """Delete an IMAP folder, but only an empty, ordinary one.
 
-    Returns the count of messages that were inside the folder before deletion
-    (0 for the safe empty-folder path).
+    Refused, with nothing changed and no way to override:
+
+    * the inbox and the system folders (trash, drafts, sent, junk, archive);
+    * a folder that contains any message — including ones flagged
+      ``\\Deleted`` but not yet expunged, since the server still counts them;
+    * a folder that has subfolders, whatever they contain.
+
+    Upstream let the caller pass ``confirm=true`` to delete a non-empty
+    folder. That flag was supplied by the model, so it was not a check; it
+    is gone. If the message count cannot be read, the delete is refused.
     """
     validate_mailbox_name(mailbox)
-    if not client.folder_exists(mailbox):
+    folders = {f.name: f for f in list_folders(client)}
+    info = folders.get(mailbox)
+    reason = _protected_reason(mailbox, info, protected)
+    if reason:
+        raise ProtectedFolder(
+            f"folder {mailbox!r} cannot be deleted: {reason}. There is no override."
+        )
+    if info is None:
         raise RuntimeError(f"folder {mailbox!r} does not exist")
+
+    children = (
+        sorted(n for n in folders if n.startswith(mailbox + info.delimiter))
+        if info.delimiter
+        else []
+    )
+    if children or "\\HasChildren" in info.flags:
+        shown = ", ".join(repr(c) for c in children[:5]) or "reported by the server"
+        raise FolderNotEmpty(
+            f"folder {mailbox!r} has subfolders ({shown}). This server only "
+            "deletes folders with no messages and no subfolders. There is no "
+            "override."
+        )
+
     status = client.folder_status(mailbox, what=["MESSAGES"])
-    count = int(status.get(b"MESSAGES", 0))
-    if count and not allow_non_empty:
-        raise RuntimeError(
-            f"folder {mailbox!r} is not empty ({count} messages). "
-            "Pass confirm=true to allow deletion of a non-empty folder."
+    if b"MESSAGES" not in status:
+        raise FolderNotEmpty(
+            f"could not read the message count of folder {mailbox!r}, so it "
+            "was not deleted."
+        )
+    count = int(status[b"MESSAGES"])
+    if count:
+        raise FolderNotEmpty(
+            f"folder {mailbox!r} is not empty ({count} messages). This server "
+            "never deletes a folder that contains messages, and there is no "
+            "override. Move the messages elsewhere first, or leave the folder."
         )
     client.delete_folder(mailbox)
-    return count
 
 
 def set_flags(
@@ -920,8 +1034,16 @@ def delete_uids(
 ) -> int:
     """Move to Trash by default; only expunge when ``permanent=True``.
 
-    Permanent deletion is irreversible and is gated by the caller both via the
-    ``permanent`` flag and by the ``MAIL_MCP_ALLOW_PERMANENT_DELETE`` env var.
+    ``permanent=True`` is NOT reachable from any tool in this fork. Its one
+    caller is ``update_draft``, which uses it to remove the superseded copy
+    of a draft it has just re-appended, and only ever inside the Drafts
+    mailbox (see ``_drafts_mailbox_strict``). ``delete_emails`` always passes
+    ``permanent=False``; ``tests/test_destructive_guards.py`` fails if any
+    other caller appears. Upstream gated a permanent ``delete_emails`` behind
+    ``MAIL_MCP_ALLOW_PERMANENT_DELETE``; that switch no longer exists.
+
+    The trash path refuses when ``mailbox`` is the trash itself: removing
+    messages from the trash is emptying it, which this fork never does.
 
     The expunge step uses :func:`safe_uid_expunge`, which requires the
     server to advertise RFC 4315 UIDPLUS. Without UIDPLUS the previous
@@ -953,13 +1075,20 @@ def delete_uids(
                 "server does not advertise UIDPLUS, so EXPUNGE cannot be "
                 "scoped to specific UIDs without risking unrelated messages "
                 "another client has already flagged \\Deleted. No messages "
-                "were mutated. Move-to-trash (permanent=false) works without "
-                "UIDPLUS."
+                "were mutated."
             )
         client.add_flags(uids, [b"\\Deleted"])
         safe_uid_expunge(client, uids=uids)
         return len(uids)
     validate_mailbox_name(trash_mailbox)
+    if _same_mailbox(mailbox, trash_mailbox):
+        # "Deleting" something already in the trash is emptying the trash.
+        raise ProtectedFolder(
+            f"the messages are already in the trash ({trash_mailbox!r}). This "
+            "server never removes messages from the trash; the user empties "
+            "it from their own mail client. To restore a message, move it "
+            "back with move_email."
+        )
     return move_uids(client, source=mailbox, destination=trash_mailbox, uids=uids)
 
 

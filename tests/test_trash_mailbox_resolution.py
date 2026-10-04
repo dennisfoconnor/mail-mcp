@@ -139,9 +139,7 @@ def test_delete_email_tool_moves_to_resolved_trash_on_localised_account():
                                    AuthCredential(kind="password", username="x@e.com", secret="x"))):
         result = delete_email(
             cfg,
-            DeleteEmailInput(
-                account="t", mailbox="INBOX", uids=[5, 6], permanent=False,
-            ),
+            DeleteEmailInput(account="t", mailbox="INBOX", uids=[5, 6]),
         )
 
     assert result["mode"] == "trash"

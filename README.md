@@ -75,16 +75,18 @@ Three layers: your AI client talks MCP JSON-RPC over stdio, `mail-mcp` enforces 
 | `copy_email` | ⚠️ | `MAIL_MCP_WRITE_ENABLED=true` | Copy without moving (file in two folders) |
 | `move_email` | ⚠️ | `MAIL_MCP_WRITE_ENABLED=true` | Move messages between mailboxes |
 | `mark_emails` | ⚠️ | `MAIL_MCP_WRITE_ENABLED=true` | Set/clear Seen and Flagged |
-| `delete_emails` | 🗑️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Move to Trash by default; permanent delete needs a third switch |
+| `delete_emails` | 🗑️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Move to Trash. Never permanent; refuses messages already in the trash |
 | `create_folder` | ⚠️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Create an IMAP folder (idempotent) |
 | `rename_folder` | ⚠️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Rename a folder, refuses collisions |
-| `delete_folder` | 🗑️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Delete a folder; non-empty requires `confirm=true` |
+| `delete_folder` | 🗑️ | write + `MAIL_MCP_DESTRUCTIVE_ENABLED=true` | Delete an empty folder. Refuses folders with messages or subfolders, and system folders. No override |
 
 There is no `send_email` or `send_draft`. Three levels, each a superset of the one before:
 
 - **Default** — read tools and the four draft tools.
 - **`MAIL_MCP_WRITE_ENABLED=true`** — adds `copy_email`, `move_email`, `mark_emails`.
 - **`MAIL_MCP_WRITE_ENABLED=true` + `MAIL_MCP_DESTRUCTIVE_ENABLED=true`** — adds `delete_emails` and the folder tools. The destructive switch on its own does nothing.
+
+Even at the top level nothing destroys mail: delete only moves to the trash, the trash cannot be emptied, and only empty folders can be deleted. See [What the destructive switch cannot do](#what-the-destructive-switch-cannot-do).
 
 Tools outside the active level are *not registered*: the model cannot enumerate them, let alone call them.
 
@@ -116,8 +118,18 @@ Pass `raw_passthrough: true` in an `AttachmentSpec`. The bytes go on the wire by
 **Escape hatch when MIME is exotic.**
 `get_email_raw(uid=N, max_bytes=…)` returns the full RFC822 source, capped, wrapped in `<untrusted_email_content>`, and also written to `~/Downloads/mail-mcp/<alias>/raw-uid-<N>.eml`. Reach for it when `get_email` returns an empty body or `list_attachments` is missing parts you can see in the user's mail client.
 
-**Permanent delete that can't take other people's mail with it.**
-`delete_emails(permanent=true)` uses RFC 4315 `UID EXPUNGE` (UIDPLUS) under the hood, scoped to the UIDs you asked to remove. On a server without UIDPLUS the call refuses with `error.code = "UIDPLUS_REQUIRED_FOR_SAFE_EXPUNGE"` and *no mutation* — the alternative (bare `EXPUNGE`) would delete every message any client had flagged `\Deleted` in that mailbox, which mail-mcp will not do.
+**Move mail on servers without IMAP MOVE.**
+iCloud does not advertise the MOVE extension. `move_email` (and move-to-trash) falls back to what RFC 6851 gives as the equivalent: COPY, flag the originals `\Deleted`, then `UID EXPUNGE` exactly those UIDs. Nothing is removed until the copy has succeeded, and a bare `EXPUNGE` is never issued — it would also remove whatever another client had already flagged `\Deleted`.
+
+### What the destructive switch cannot do
+
+`MAIL_MCP_DESTRUCTIVE_ENABLED=true` is meant to be safe to leave on. None of these limits has an override argument or environment variable:
+
+- **No permanent delete.** `delete_emails` moves messages to the trash and nothing else. Upstream's `permanent=true` and `MAIL_MCP_ALLOW_PERMANENT_DELETE` are gone; passing `permanent` is a validation error.
+- **The trash cannot be emptied.** Messages already in the trash cannot be deleted, and the trash folder cannot be deleted or renamed. You empty it from your own mail client.
+- **Trashed mail can be restored.** `move_email` from the trash back to any folder works with the write switch. Your mail provider may still erase old trash on its own schedule — that is a setting in your mail account, not something this server controls.
+- **Only empty folders can be deleted.** `delete_folder` refuses a folder that contains any message or any subfolder. Upstream's `confirm=true` is gone; passing it is a validation error.
+- **System folders are fixed.** The inbox, trash, drafts, sent, junk and archive folders cannot be deleted or renamed, whether the server flags them or not.
 
 ## Install
 
@@ -239,10 +251,9 @@ failures and their fixes.
 |----------|---------|---------|
 | `MAIL_MCP_WRITE_ENABLED` | `false` | Register the organising tools (`copy_email`, `move_email`, `mark_emails`). When unset they are *not registered* — the LLM cannot enumerate them. |
 | `MAIL_MCP_DESTRUCTIVE_ENABLED` | `false` | Additionally register `delete_emails` and the folder tools (`create_folder`, `rename_folder`, `delete_folder`). Only takes effect together with `MAIL_MCP_WRITE_ENABLED=true`. |
-| `MAIL_MCP_ALLOW_PERMANENT_DELETE` | `false` | Allow `permanent=true` on `delete_emails`. Permanent delete uses UID-scoped `EXPUNGE` (RFC 4315 UIDPLUS) — never bare `EXPUNGE`. |
 | `MAIL_MCP_ATTACHMENT_DIR` | _unset_ | Additional directory accepted as a draft-attachment source on top of the single default, `~/Documents/mail-mcp-outbox`. Upstream also allowed `~/Downloads` and `$TMPDIR`; this fork does not. |
 
-`MAIL_MCP_SEND_ENABLED` and `MAIL_MCP_SEND_HOURLY_LIMIT` are upstream switches. This fork ignores them.
+`MAIL_MCP_SEND_ENABLED`, `MAIL_MCP_SEND_HOURLY_LIMIT` and `MAIL_MCP_ALLOW_PERMANENT_DELETE` are upstream switches. This fork ignores them.
 | `MAIL_MCP_LOG_LEVEL` | `WARNING` | Server log level on stderr (`DEBUG` / `INFO` / `WARNING` / `ERROR`). Logs are sanitised — bearer tokens, `XOAUTH2`/`AUTH PLAIN`/`AUTH LOGIN` blobs, and `password=…` / `secret=…` / `token=…` key-value pairs are scrubbed before write. |
 | `MAIL_MCP_IMAP_CONNECT_TIMEOUT` | `15` | IMAP TCP + TLS handshake timeout, seconds. |
 | `MAIL_MCP_IMAP_READ_TIMEOUT` | `30` | IMAP socket read timeout, seconds. |
@@ -270,8 +281,8 @@ Extensive threat model in [SECURITY.md](SECURITY.md) and [docs/THREAT_MODEL.md](
 - CRLF-injection defence in every header-bound string.
 - XPIA wrapper on every email body returned to the LLM, with closing-tag breakouts and zero-width invisibles neutralised.
 - Provider autoconfig XML parsed through `defusedxml` — billion-laughs and XXE refused regardless of the body-size cap.
-- Destructive tools require explicit opt-in flags *and* per-call argument confirmation.
-- Permanent delete uses RFC 4315 UID-scoped `EXPUNGE` only — bare `EXPUNGE` (which would wipe other clients' `\Deleted`-flagged mail) is refused with a clear typed error.
+- Destructive tools require explicit opt-in flags, and even then cannot destroy mail.
+- No permanent delete, no emptying the trash, no deleting a folder that holds mail — `tests/test_destructive_guards.py` pins each one. A bare `EXPUNGE` (which would wipe other clients' `\Deleted`-flagged mail) is never issued.
 - Errors sent to the LLM redact bearer tokens, SASL XOAUTH2 / AUTH PLAIN / AUTH LOGIN payloads, IMAP `LOGIN "user" "pass"` traces, plus emails and hostnames.
 - Six direct dependencies, reproducible builds, no postinstall hooks.
 
