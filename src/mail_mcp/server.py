@@ -129,6 +129,17 @@ ORGANISE (registered only when MAIL_MCP_WRITE_ENABLED=true):
 DESTRUCTIVE (registered only when MAIL_MCP_WRITE_ENABLED=true AND
 MAIL_MCP_DESTRUCTIVE_ENABLED=true):
   - delete_emails, create_folder, rename_folder, delete_folder
+  - Nothing here destroys mail, and none of these limits has an override:
+    * delete_emails moves messages to the trash. It is never permanent, and
+      it refuses messages that are already in the trash — this server cannot
+      empty the trash. Restore with move_email from the trash folder.
+    * delete_folder only deletes a folder with no messages and no
+      subfolders. Do not empty a folder in order to delete it unless the
+      user asked for exactly that.
+    * System folders (inbox, trash, drafts, sent, junk, archive) cannot be
+      deleted or renamed.
+    If one of these refuses (PROTECTED_FOLDER, FOLDER_NOT_EMPTY), tell the
+    user; do not look for another route.
 
 SENDING: not available. This server has no send tool and no SMTP code, and
 no setting enables one. If the user asks you to send, save a draft and tell
@@ -414,9 +425,10 @@ def build_tool_table() -> list[tuple[Tool, type, Any]]:
             Tool(
                 name="delete_emails",
                 description=(
-                    "Move messages to Trash (default) or permanently delete "
-                    "them. Permanent deletion requires "
-                    "MAIL_MCP_ALLOW_PERMANENT_DELETE=true plus confirm=true."
+                    "Move messages to the Trash folder. Never permanent: this "
+                    "server cannot expunge mail or empty the trash, and "
+                    "messages already in the trash cannot be deleted. A "
+                    "trashed message can be restored with move_email."
                 ),
                 inputSchema=DeleteEmailInput.model_json_schema(),
                 annotations={"destructiveHint": True},
@@ -440,7 +452,11 @@ def build_tool_table() -> list[tuple[Tool, type, Any]]:
         (
             Tool(
                 name="rename_folder",
-                description="Rename an IMAP folder. Fails if the destination already exists.",
+                description=(
+                    "Rename an IMAP folder. Fails if the destination already "
+                    "exists. System folders (inbox, trash, drafts, sent, junk, "
+                    "archive) cannot be renamed."
+                ),
                 inputSchema=RenameFolderInput.model_json_schema(),
                 annotations={"destructiveHint": False},
             ),
@@ -451,9 +467,9 @@ def build_tool_table() -> list[tuple[Tool, type, Any]]:
             Tool(
                 name="delete_folder",
                 description=(
-                    "Delete an IMAP folder. Refuses non-empty folders unless "
-                    "confirm=true is passed — deleting a folder with messages "
-                    "is irreversible on most providers."
+                    "Delete an EMPTY IMAP folder. Refused, with no override, "
+                    "if the folder contains any message or subfolder, or is a "
+                    "system folder (inbox, trash, drafts, sent, junk, archive)."
                 ),
                 inputSchema=DeleteFolderInput.model_json_schema(),
                 annotations={"destructiveHint": True},
@@ -537,12 +553,19 @@ def _classify(exc: BaseException) -> dict[str, Any]:
             "the same tool again with include_signature=true or "
             "include_signature=false. Nothing was saved."
         )
-    elif cls == "OperationDisabled":
-        code = "PERMISSION_DENIED"
+    elif cls == "ProtectedFolder":
+        code = "PROTECTED_FOLDER"
         hint = (
-            "This operation is gated behind an environment flag that only "
-            "the user can set in their MCP client config (the error message "
-            "names it). Tell the user; do not retry."
+            "This server never deletes or renames system folders and never "
+            "removes messages from the trash. There is no override. Tell the "
+            "user; do not retry or try another route."
+        )
+    elif cls == "FolderNotEmpty":
+        code = "FOLDER_NOT_EMPTY"
+        hint = (
+            "This server only deletes folders with no messages and no "
+            "subfolders. There is no override. Tell the user what is in the "
+            "folder; do not move its contents out unless they ask you to."
         )
     elif cls == "ValidationError" or "validation" in lower:
         code = "VALIDATION_ERROR"

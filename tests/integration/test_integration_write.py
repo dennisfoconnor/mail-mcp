@@ -5,8 +5,8 @@ Agent D file ownership (see ``tests/integration/_contract.md``). Exercises
 
 * move / copy between folders
 * flag mutations (read, unread, flagged)
-* trash-mode and permanent delete with env + confirm gating
-* folder create / rename / delete (empty and non-empty paths)
+* delete, which only ever moves to the trash (no permanent delete)
+* folder create / rename / delete (empty folders only)
 * batch-size cap on copy
 
 Relies on the shared session/function fixtures declared in
@@ -47,15 +47,12 @@ pytestmark = pytest.mark.integration
 def _enable_writes(monkeypatch):
     """Open the write gate for every test in this file.
 
-    The organize tools are registered by ``server.build_server`` only when
-    ``MAIL_MCP_WRITE_ENABLED=true``; we call the handlers directly here so
-    this is mostly belt-and-braces, but ``delete_email(permanent=True)`` does
-    consult ``MAIL_MCP_ALLOW_PERMANENT_DELETE`` at call-time and we want the
-    suite to be self-contained.
+    The organize tools are registered by ``server.build_tool_table`` only
+    when the write (and, for delete / folders, destructive) switches are
+    set; we call the handlers directly here so this is belt-and-braces.
     """
     monkeypatch.setenv("MAIL_MCP_WRITE_ENABLED", "true")
-    # Permanent-delete stays OFF by default; individual tests opt in.
-    monkeypatch.delenv("MAIL_MCP_ALLOW_PERMANENT_DELETE", raising=False)
+    monkeypatch.setenv("MAIL_MCP_DESTRUCTIVE_ENABLED", "true")
 
 
 def _uids_in(cfg, mailbox: str) -> list[int]:
@@ -189,7 +186,7 @@ def test_mark_emails_unread_again(cfg, deliver):
 
 
 # ---------------------------------------------------------------------------
-# Delete (trash vs permanent)
+# Delete (always to the trash)
 # ---------------------------------------------------------------------------
 
 
@@ -202,9 +199,7 @@ def test_delete_emails_moves_to_trash_by_default(cfg, deliver):
 
     result = organize.delete_email(
         cfg,
-        DeleteEmailInput(
-            mailbox="INBOX", uids=[uid], permanent=False, confirm=False,
-        ),
+        DeleteEmailInput(mailbox="INBOX", uids=[uid]),
     )
     assert result["mode"] == "trash"
     assert result["affected"] == 1
@@ -213,44 +208,40 @@ def test_delete_emails_moves_to_trash_by_default(cfg, deliver):
     assert _message_exists(cfg, "Trash", subject)
 
 
-def test_delete_emails_permanent_requires_env_and_confirm(cfg, deliver, monkeypatch):
+def test_delete_emails_has_no_permanent_mode(cfg, deliver, monkeypatch):
+    """The upstream ``permanent`` / ``confirm`` arguments are rejected outright."""
+    import pydantic
+
     subject = _unique_subject("perm")
     deliver(subject=subject)
     uid = _find_uid_by_subject(cfg, "INBOX", subject)
 
-    # 1) Env NOT set, confirm=True → refused.
-    monkeypatch.delenv("MAIL_MCP_ALLOW_PERMANENT_DELETE", raising=False)
-    with pytest.raises(organize.OperationDisabled):
-        organize.delete_email(
-            cfg,
-            DeleteEmailInput(
-                mailbox="INBOX", uids=[uid], permanent=True, confirm=True,
-            ),
-        )
-    assert _message_exists(cfg, "INBOX", subject)
-
-    # 2) Env set, confirm=False → still refused.
     monkeypatch.setenv("MAIL_MCP_ALLOW_PERMANENT_DELETE", "true")
-    with pytest.raises(organize.OperationDisabled):
-        organize.delete_email(
-            cfg,
-            DeleteEmailInput(
-                mailbox="INBOX", uids=[uid], permanent=True, confirm=False,
-            ),
-        )
+    with pytest.raises(pydantic.ValidationError):
+        DeleteEmailInput(mailbox="INBOX", uids=[uid], permanent=True, confirm=True)
     assert _message_exists(cfg, "INBOX", subject)
 
-    # 3) Both gates open → message is expunged.
-    result = organize.delete_email(
-        cfg,
-        DeleteEmailInput(
-            mailbox="INBOX", uids=[uid], permanent=True, confirm=True,
-        ),
+
+def test_delete_emails_refuses_messages_already_in_trash(cfg, deliver):
+    """Deleting from the trash would be emptying it."""
+    from mail_mcp import imap_client
+
+    organize.create_folder(cfg, CreateFolderInput(mailbox="Trash"))
+    subject = _unique_subject("intrash")
+    deliver(subject=subject)
+    uid = _find_uid_by_subject(cfg, "INBOX", subject)
+    organize.delete_email(cfg, DeleteEmailInput(mailbox="INBOX", uids=[uid]))
+    trashed_uid = _find_uid_by_subject(cfg, "Trash", subject)
+
+    with pytest.raises(imap_client.ProtectedFolder):
+        organize.delete_email(cfg, DeleteEmailInput(mailbox="Trash", uids=[trashed_uid]))
+    assert _message_exists(cfg, "Trash", subject)
+
+    # ...and it can be restored.
+    organize.move_email(
+        cfg, MoveEmailInput(source="Trash", destination="INBOX", uids=[trashed_uid]),
     )
-    assert result["mode"] == "permanent"
-    assert result["affected"] == 1
-    assert uid not in _uids_in(cfg, "INBOX")
-    assert not _message_exists(cfg, "INBOX", subject)
+    assert _message_exists(cfg, "INBOX", subject)
 
 
 # ---------------------------------------------------------------------------
@@ -300,15 +291,8 @@ def test_rename_folder_refuses_collision(cfg):
         )
 
 
-def test_delete_folder_refuses_non_empty_without_confirm(cfg, deliver):
-    """The guard rejects non-empty folders without ``confirm=true``.
-
-    The "delete after confirm=True" half of the original scenario is covered
-    separately because GreenMail closes the IMAP socket on ``DELETE`` of a
-    non-empty mailbox (it honours the MUST-be-empty recommendation in
-    RFC 3501 §6.3.4 more strictly than most providers). The refuse-guard is
-    the piece worth exercising here.
-    """
+def test_delete_folder_refuses_non_empty(cfg, deliver):
+    """A folder holding a message is never deleted; there is no override."""
     organize.create_folder(cfg, CreateFolderInput(mailbox="Busy"))
     subject = _unique_subject("busy")
     deliver(subject=subject)
@@ -319,9 +303,7 @@ def test_delete_folder_refuses_non_empty_without_confirm(cfg, deliver):
     assert _message_exists(cfg, "Busy", subject)
 
     with pytest.raises(RuntimeError, match="not empty"):
-        organize.delete_folder(
-            cfg, DeleteFolderInput(mailbox="Busy", confirm=False),
-        )
+        organize.delete_folder(cfg, DeleteFolderInput(mailbox="Busy"))
     # Still there — the refuse path did not swallow the messages.
     assert _message_exists(cfg, "Busy", subject)
 
@@ -330,9 +312,7 @@ def test_delete_folder_empty_succeeds(cfg):
     import imaplib
 
     organize.create_folder(cfg, CreateFolderInput(mailbox="Empty"))
-    result = organize.delete_folder(
-        cfg, DeleteFolderInput(mailbox="Empty", confirm=False),
-    )
+    result = organize.delete_folder(cfg, DeleteFolderInput(mailbox="Empty"))
     assert result["status"] == "deleted"
     assert result["messages_lost"] == 0
     with pytest.raises((RuntimeError, imaplib.IMAP4.error)):

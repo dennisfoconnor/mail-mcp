@@ -368,25 +368,32 @@ class RenameFolderInput(_AccountScoped):
 
 
 class DeleteFolderInput(_AccountScoped):
-    mailbox: str = Field(max_length=255, description="Folder path to delete.")
-    confirm: bool = Field(
-        default=False,
+    # ``extra="forbid"``: upstream took ``confirm=true`` to delete a non-empty
+    # folder. A caller that still passes it gets a validation error rather
+    # than a silently ignored argument.
+    model_config = {"extra": "forbid"}
+
+    mailbox: str = Field(
+        max_length=255,
         description=(
-            "Required when the folder still contains messages. Deleting a non-empty "
-            "folder is irreversible on most IMAP providers; treat with care."
+            "Folder path to delete. Must contain no messages and no subfolders, "
+            "and must not be a system folder. There is no override."
         ),
     )
 
 
 class DeleteEmailInput(_AccountScoped):
+    # ``extra="forbid"``: upstream took ``permanent=true`` / ``confirm=true``.
+    # A caller that still passes them gets a validation error rather than a
+    # silently ignored argument.
+    model_config = {"extra": "forbid"}
+
     mailbox: str = Field(default="INBOX", max_length=255)
-    uids: list[int] = Field(min_length=1, max_length=100)
-    permanent: bool = Field(
-        default=False,
+    uids: list[int] = Field(
+        min_length=1,
+        max_length=100,
         description=(
-            "When false (default) messages are moved to Trash. When true the "
-            "messages are expunged and cannot be recovered; additionally the "
-            "server must be started with MAIL_MCP_ALLOW_PERMANENT_DELETE=true."
+            "UIDs to move to the trash. Deletion is never permanent, and "
+            "messages already in the trash cannot be deleted."
         ),
     )
-    confirm: bool = Field(default=False)

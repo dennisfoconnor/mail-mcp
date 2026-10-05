@@ -9,8 +9,7 @@ unless ``--connect`` is passed:
 * which MCP clients (Claude Desktop, Claude Code, Codex CLI) reference
   mail-mcp, and
 * the state of the environment gates (``MAIL_MCP_WRITE_ENABLED``,
-  ``MAIL_MCP_DESTRUCTIVE_ENABLED``, ``MAIL_MCP_ALLOW_PERMANENT_DELETE``,
-  ``MAIL_MCP_LOG_LEVEL``).
+  ``MAIL_MCP_DESTRUCTIVE_ENABLED``, ``MAIL_MCP_LOG_LEVEL``).
 
 No passwords, tokens or message bodies are emitted. The report **does**
 include the account's email address and the hostnames of the configured
@@ -35,7 +34,6 @@ from .keyring_store import SERVICE_PREFIX
 _ENV_FLAGS = (
     "MAIL_MCP_WRITE_ENABLED",
     "MAIL_MCP_DESTRUCTIVE_ENABLED",
-    "MAIL_MCP_ALLOW_PERMANENT_DELETE",
     "MAIL_MCP_ALLOW_INSECURE_TLS",
     "MAIL_MCP_LOG_LEVEL",
     "MAIL_MCP_IMAP_CONNECT_TIMEOUT",

@@ -123,6 +123,10 @@ def test_delete_email_tool_moves_to_resolved_trash_on_localised_account():
             ([b"\\HasNoChildren"], "/", "INBOX"),
             ([b"\\HasNoChildren", b"\\Trash"], "/", "Papelera"),
         ]
+        # This server has MOVE; the no-MOVE fallback is covered in
+        # tests/test_move_fallback.py.
+        client.capabilities.return_value = (b"IMAP4REV1", b"MOVE")
+
         # Capture move target without involving move_uids' validation.
         def fake_move(uids, destination):
             moves.append((list(uids), destination))
@@ -135,9 +139,7 @@ def test_delete_email_tool_moves_to_resolved_trash_on_localised_account():
                                    AuthCredential(kind="password", username="x@e.com", secret="x"))):
         result = delete_email(
             cfg,
-            DeleteEmailInput(
-                account="t", mailbox="INBOX", uids=[5, 6], permanent=False,
-            ),
+            DeleteEmailInput(account="t", mailbox="INBOX", uids=[5, 6]),
         )
 
     assert result["mode"] == "trash"

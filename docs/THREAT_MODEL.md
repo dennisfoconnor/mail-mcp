@@ -40,7 +40,7 @@ Mitigations:
 - Mutating tools are registered only when `MAIL_MCP_WRITE_ENABLED=true`. If you never set it, the model *cannot see* the write tools and cannot call them.
 - Sending is not available under any flag. Delete and folder changes need a second flag (`MAIL_MCP_DESTRUCTIVE_ENABLED=true`) on top of the write flag.
 - Draft attachments can only come from `~/Documents/mail-mcp-outbox` (or `MAIL_MCP_ATTACHMENT_DIR`), so an injected model cannot pull arbitrary downloaded files into a draft.
-- `delete_emails` defaults to Trash; permanent delete requires a third env flag and explicit `confirm=true`.
+- `delete_emails` only moves to the trash; there is no permanent delete and the trash cannot be emptied. `delete_folder` only deletes empty folders. An injected model with every switch on can at worst move mail into the trash, where the user can move it back.
 - Structured IMAP SEARCH (no string concat) prevents the LLM from crafting queries that bypass filters.
 
 ### 3. A passive network attacker

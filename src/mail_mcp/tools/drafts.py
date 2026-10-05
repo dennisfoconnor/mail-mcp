@@ -53,9 +53,8 @@ def _drafts_mailbox_strict(
     default-visible draft tool) could pass
     ``mailbox="INBOX"`` plus an arbitrary UID and the handler would
     happily APPEND a copy to Drafts and then UID-expunge the original
-    from INBOX — bypassing ``MAIL_MCP_WRITE_ENABLED``,
-    ``MAIL_MCP_ALLOW_PERMANENT_DELETE``, and the per-call ``confirm=true``
-    that ``delete_emails`` requires for the same primitive. That is a
+    from INBOX — bypassing ``MAIL_MCP_WRITE_ENABLED`` and performing a
+    permanent delete, which this fork offers through no tool at all. That is a
     trust-boundary violation in a tool the user expects to operate
     only on drafts.
 
